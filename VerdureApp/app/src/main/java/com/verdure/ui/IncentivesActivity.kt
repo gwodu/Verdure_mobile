@@ -16,6 +16,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.cactus.CactusContextInitializer
 import com.verdure.R
 import com.verdure.core.CactusLLMEngine
+import com.verdure.data.Incentive
 import com.verdure.data.IncentiveStore
 import com.verdure.tools.IncentiveTool
 import kotlinx.coroutines.launch
