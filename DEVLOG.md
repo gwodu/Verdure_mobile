@@ -1551,11 +1551,28 @@ data class StoredNotification(
 ### Dependencies Added
 
 **Room Database:**
-- `androidx.room:room-runtime:2.6.1` (~300 KB)
-- `androidx.room:room-ktx:2.6.1` (Kotlin extensions)
-- `androidx.room:room-compiler:2.6.1` (KSP annotation processor)
+- `androidx.room:room-runtime:2.8.4` (~300 KB)
+- `androidx.room:room-ktx:2.8.4` (Kotlin extensions)
+- `androidx.room:room-compiler:2.8.4` (KAPT annotation processor)
 
-**KSP (Kotlin Symbol Processing):**
-- `com.google.devtools.ksp:2.0.21-1.0.28`
-- Replaces KAPT for Kotlin 2.x compatibility
-- Faster build times than KAPT
+**Annotation Processing:**
+- Using KAPT (not KSP) for Kotlin 2.2.0 compatibility
+- KSP not yet stable for Kotlin 2.2.0 (metadata version 2.2.0 unsupported)
+- Room 2.8.4 has Kotlin 2.2.0 metadata support with KAPT
+
+### Build Troubleshooting (Session 15)
+
+**Issue:** Multiple Kotlin version compatibility errors during merge to main
+
+**Resolution steps:**
+1. ❌ Tried KSP 2.2.0-1.0.28, 2.2.0-1.0.10, 2.2.0-1.0.1, 2.2.0-1.0.0 - None exist in Maven
+2. ❌ Downgraded Kotlin to 2.0.21 - Cactus SDK compiled with 2.2.0 (incompatible)
+3. ❌ Force resolution strategy for Kotlin 2.0.21 - AAR binary metadata can't be overridden
+4. ❌ Room 2.6.1 + KAPT - KAPT doesn't support Kotlin 2.2.0 metadata in Room 2.6.1
+5. ✅ Room 2.8.4 + KAPT + Kotlin 2.2.0 - Success!
+
+**Root cause:** Cactus SDK 1.2.0-beta compiled with Kotlin 2.2.0, Room 2.6.1 KAPT compiler doesn't support 2.2.0 metadata
+
+**Solution:** Upgrade Room to 2.8.4 (supports Kotlin 2.2.0 metadata with KAPT)
+
+**Tradeoff:** KAPT slower than KSP (~20% longer build), but stable and working (acceptable)
