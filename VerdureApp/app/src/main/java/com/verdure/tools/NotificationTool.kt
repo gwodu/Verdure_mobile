@@ -1,26 +1,40 @@
 package com.verdure.tools
 
+import android.content.Context
 import android.util.Log
 import com.verdure.core.LLMEngine
 import com.verdure.data.NotificationData
 import com.verdure.data.NotificationFilter
+import com.verdure.data.NotificationRepository
+import com.verdure.data.StoredNotification
 import com.verdure.data.UserContextManager
+import com.verdure.data.VerdurePreferences
 import com.verdure.services.VerdureNotificationListener
 
 /**
  * Tool for analyzing and prioritizing notifications
  *
  * Architecture:
- * 1. Heuristic filter (NotificationFilter) marks notifications as PRIORITY using user context rules
- * 2. LLM analyzes ONLY priority-flagged notifications (10-15 max)
- * 3. Returns intelligent summary based on user's goals/priorities
+ * 1. All notifications stored in Room database (24h retention)
+ * 2. Heuristic filter scores notifications on arrival
+ * 3. LLM analyzes priority notifications from Room (not just in-memory)
+ * 4. Auto-dismissal respects user toggle settings
  *
  * This validates the hybrid system: heuristic does heavy lifting, LLM provides synthesis
  */
 class NotificationTool(
+    private val context: Context,
     private val llmEngine: LLMEngine,
     private val contextManager: UserContextManager
 ) : Tool {
+    private val repository: NotificationRepository by lazy {
+        NotificationRepository.getInstance(context)
+    }
+    
+    private val preferences: VerdurePreferences by lazy {
+        VerdurePreferences.getInstance(context)
+    }
+    
     companion object {
         private const val TAG = "NotificationTool"
         private const val DEFAULT_CLEAR_AFTER_VIEW = true
@@ -35,14 +49,18 @@ class NotificationTool(
 
         // If action is "get_all", just return formatted notification list (no LLM)
         if (action == "get_all") {
-            // Get priority-filtered notifications (heuristic does the heavy lifting)
+            // Get priority-filtered notifications from Room (last 24h)
             // Limit to 8 priority notifications (safe token budget: ~1200 tokens total)
             val notifications = getPriorityNotifications(limit = 8)
             if (notifications.isEmpty()) {
                 return "No priority notifications right now."
             }
             val formatted = formatNotificationsForContext(notifications)
-            maybeDismissViewedNotifications(notifications, clearAfterView)
+            maybeDismissViewedNotifications(
+                notifications, 
+                clearAfterView,
+                VerdurePreferences.DismissalContext.CHAT
+            )
             return formatted
         }
 
@@ -57,7 +75,11 @@ class NotificationTool(
                 return "No notifications found matching: ${keywordStrings.joinToString(", ")}"
             }
             val formatted = formatNotificationsForContext(notifications)
-            maybeDismissViewedNotifications(notifications, clearAfterView)
+            maybeDismissViewedNotifications(
+                notifications, 
+                clearAfterView,
+                VerdurePreferences.DismissalContext.CHAT
+            )
             return formatted
         }
 
@@ -69,14 +91,18 @@ class NotificationTool(
                 return "No priority notifications right now."
             }
             val formatted = formatNotificationsForContext(notifications)
-            maybeDismissViewedNotifications(notifications, clearAfterView)
+            maybeDismissViewedNotifications(
+                notifications, 
+                clearAfterView,
+                VerdurePreferences.DismissalContext.CHAT
+            )
             return formatted
         }
 
         // Otherwise, use LLM to analyze (original behavior)
         val userQuery = params["query"] as? String ?: "What's important?"
 
-        // Get priority-filtered notifications (heuristic pre-filtering)
+        // Get priority-filtered notifications from Room (last 24h)
         val notifications = getPriorityNotifications()
 
         if (notifications.isEmpty()) {
@@ -104,34 +130,53 @@ Provide a brief, clear summary.
         """.trimIndent()
 
         val response = llmEngine.generateContent(prompt)
-        maybeDismissViewedNotifications(notifications, clearAfterView)
+        maybeDismissViewedNotifications(
+            notifications, 
+            clearAfterView,
+            VerdurePreferences.DismissalContext.CHAT
+        )
         return response
     }
 
     private fun maybeDismissViewedNotifications(
-        notifications: List<NotificationData>,
-        clearAfterView: Boolean
+        notifications: List<StoredNotification>,
+        clearAfterView: Boolean,
+        dismissalContext: VerdurePreferences.DismissalContext
     ) {
         if (!clearAfterView || notifications.isEmpty()) {
             return
         }
 
-        val dismissedCount = VerdureNotificationListener.dismissViewedNotifications(notifications)
+        // Filter notifications based on settings (respects toggle + calendar exclusion)
+        val dismissibleNotifications = notifications.filter { notification ->
+            preferences.shouldDismissNotification(notification, dismissalContext)
+        }
+
+        if (dismissibleNotifications.isEmpty()) {
+            Log.d(TAG, "No notifications eligible for dismissal (toggle/settings)")
+            return
+        }
+
+        // Convert to NotificationData for compatibility with dismissal API
+        val notificationDataList = dismissibleNotifications.map { it.toNotificationData() }
+        
+        val dismissedCount = VerdureNotificationListener.dismissViewedNotifications(notificationDataList)
         if (dismissedCount > 0) {
-            Log.d(TAG, "Dismissed $dismissedCount viewed notifications after processing")
+            Log.d(TAG, "Dismissed $dismissedCount viewed notifications after processing (context: $dismissalContext)")
         }
     }
 
     /**
      * Format notifications for context/analysis
      */
-    private fun formatNotificationsForContext(notifications: List<NotificationData>): String {
+    private fun formatNotificationsForContext(notifications: List<StoredNotification>): String {
         return notifications.mapIndexed { index, notif ->
             // Sanitize text to avoid special characters that might crash LLM
             val title = sanitizeText(notif.title ?: "(no title)")
             val text = sanitizeText(notif.text ?: "(no text)")
             val timeDesc = notif.getFormattedTime()
-            "${index + 1}. ${notif.appName}: $title - $text ($timeDesc)"
+            val dismissedTag = if (notif.isDismissed) " [dismissed]" else ""
+            "${index + 1}. ${notif.appName}: $title - $text ($timeDesc)$dismissedTag"
         }.joinToString("\n")
     }
 
@@ -146,58 +191,47 @@ Provide a brief, clear summary.
     }
 
     /**
-     * Get priority notifications using heuristic filter
+     * Get priority notifications from Room database (last 24 hours).
      *
      * Flow:
-     * 1. Get all notifications from VerdureNotificationListener (Service)
-     * 2. Load user context to get priority rules
-     * 3. Use NotificationFilter to classify (heuristic matching)
-     * 4. Return only PRIORITY-flagged notifications (up to limit)
+     * 1. Query Room database for notifications (includes dismissed ones)
+     * 2. Filter by priority score (>= 2)
+     * 3. Return top N by score (already calculated and stored)
      *
-     * This is the key to the hybrid architecture: heuristic filters, LLM synthesizes
+     * This enables querying dismissed notifications - they're gone from
+     * the system tray but still searchable in Room for 24h.
      */
-    private suspend fun getPriorityNotifications(limit: Int = 8): List<NotificationData> {
-        val allNotifications = VerdureNotificationListener.notifications.value
-
-        // Load user context to get priority rules (keywords, apps, domains, senders)
-        val context = contextManager.loadContext()
-        val filter = NotificationFilter(context)
-
-        // Filter using heuristic (fast, no LLM needed)
-        val priorityNotifications = filter.filterPriority(allNotifications)
-
-        // Return top N priority notifications (not all notifications)
-        return priorityNotifications.take(limit)
+    private suspend fun getPriorityNotifications(limit: Int = 8): List<StoredNotification> {
+        return repository.getPriorityNotifications(minScore = 2, limit = limit)
     }
 
     /**
-     * Search notifications by keywords (manual filtering, no LLM)
+     * Search notifications by keywords from Room database (last 24h).
      *
      * Flow:
-     * 1. Get ALL notifications from service
-     * 2. Filter by keyword matching in app name, title, or text
+     * 1. Query Room with SQL LIKE for fast text search
+     * 2. Results sorted by priority score (high score = more relevant)
      * 3. Return matching notifications (up to limit)
      *
-     * This enables "find notifications about X" queries
+     * This enables "find notifications about X" queries even for dismissed items.
      */
-    private fun searchNotifications(keywords: List<String>, limit: Int = 10): List<NotificationData> {
-        val allNotifications = VerdureNotificationListener.notifications.value
-
+    private suspend fun searchNotifications(
+        keywords: List<String>, 
+        limit: Int = 10
+    ): List<StoredNotification> {
         if (keywords.isEmpty()) {
             // No keywords? Just return recent notifications
-            return allNotifications.take(limit)
+            return repository.getRecentNotifications(limit)
         }
 
-        // Filter notifications that contain ANY of the keywords (case-insensitive)
-        val matchingNotifications = allNotifications.filter { notif ->
-            keywords.any { keyword ->
-                val lowerKeyword = keyword.lowercase()
-                notif.appName.lowercase().contains(lowerKeyword) ||
-                (notif.title?.lowercase()?.contains(lowerKeyword) == true) ||
-                (notif.text?.lowercase()?.contains(lowerKeyword) == true)
-            }
-        }
-
-        return matchingNotifications.take(limit)
+        // Search each keyword and combine results (deduped by systemKey)
+        val allMatches = keywords.flatMap { keyword ->
+            repository.searchNotifications(keyword, limit)
+        }.distinctBy { it.systemKey }
+        
+        // Sort by priority score and return top N
+        return allMatches
+            .sortedByDescending { it.priorityScore }
+            .take(limit)
     }
 }

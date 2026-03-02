@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -11,24 +12,30 @@ import androidx.recyclerview.widget.RecyclerView
 import com.verdure.R
 import com.verdure.data.InstalledAppsManager
 import com.verdure.data.UserContextManager
+import com.verdure.data.VerdurePreferences
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * App Prioritization UI
+ * App Prioritization & Settings UI
  *
- * Allows users to visually order their apps by priority using drag-and-drop.
- * First app = highest priority, last app = lowest priority.
+ * Allows users to:
+ * 1. Configure notification auto-dismissal settings
+ * 2. Visually order apps by priority using drag-and-drop
  *
  * Architecture:
- * - Loads installed apps from InstalledAppsManager
- * - Displays in RecyclerView with drag-and-drop enabled
- * - Saves ordering to UserContext.priorityRules.customAppOrder
+ * - Settings stored in VerdurePreferences (SharedPreferences)
+ * - App order stored in UserContext.priorityRules.customAppOrder
  * - Synced with chat-based prioritization (both update the same data)
  */
 class AppPriorityActivity : AppCompatActivity() {
 
+    // Settings toggles
+    private lateinit var autoDismissSwitch: SwitchCompat
+    private lateinit var excludeCalendarSwitch: SwitchCompat
+
+    // App priority components
     private lateinit var recyclerView: RecyclerView
     private lateinit var adapter: AppPriorityAdapter
     private lateinit var saveButton: Button
@@ -37,6 +44,7 @@ class AppPriorityActivity : AppCompatActivity() {
 
     private lateinit var appsManager: InstalledAppsManager
     private lateinit var contextManager: UserContextManager
+    private lateinit var preferences: VerdurePreferences
 
     private var hasUnsavedChanges = false
 
@@ -44,7 +52,11 @@ class AppPriorityActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_app_priority)
 
-        // Initialize components
+        // Initialize settings toggles
+        autoDismissSwitch = findViewById(R.id.autoDismissSwitch)
+        excludeCalendarSwitch = findViewById(R.id.excludeCalendarSwitch)
+
+        // Initialize app priority components
         recyclerView = findViewById(R.id.appPriorityRecyclerView)
         saveButton = findViewById(R.id.saveButton)
         cancelButton = findViewById(R.id.cancelButton)
@@ -52,6 +64,10 @@ class AppPriorityActivity : AppCompatActivity() {
 
         appsManager = InstalledAppsManager(this)
         contextManager = UserContextManager.getInstance(this)
+        preferences = VerdurePreferences.getInstance(this)
+
+        // Load current settings
+        loadSettings()
 
         // Setup RecyclerView
         recyclerView.layoutManager = LinearLayoutManager(this)
@@ -69,6 +85,19 @@ class AppPriorityActivity : AppCompatActivity() {
         // Load apps asynchronously
         loadApps()
 
+        // Settings toggle handlers
+        autoDismissSwitch.setOnCheckedChangeListener { _, isChecked ->
+            preferences.autoDismissEnabled = isChecked
+            hasUnsavedChanges = true
+            updateSaveButtonState()
+        }
+
+        excludeCalendarSwitch.setOnCheckedChangeListener { _, isChecked ->
+            preferences.excludeCalendarFromDismiss = isChecked
+            hasUnsavedChanges = true
+            updateSaveButtonState()
+        }
+
         // Button handlers
         saveButton.setOnClickListener {
             saveAppOrder()
@@ -79,6 +108,14 @@ class AppPriorityActivity : AppCompatActivity() {
         }
 
         updateSaveButtonState()
+    }
+
+    /**
+     * Load current settings from preferences
+     */
+    private fun loadSettings() {
+        autoDismissSwitch.isChecked = preferences.autoDismissEnabled
+        excludeCalendarSwitch.isChecked = preferences.excludeCalendarFromDismiss
     }
 
     /**
@@ -117,19 +154,22 @@ class AppPriorityActivity : AppCompatActivity() {
     }
 
     /**
-     * Save the current app order to UserContext
+     * Save the current app order and settings
      */
     private fun saveAppOrder() {
         lifecycleScope.launch {
             saveButton.isEnabled = false
             saveButton.text = "Saving..."
 
+            // Save app order
             val currentOrder = adapter.getAppOrder()
             contextManager.updateAppPriorityOrder(currentOrder)
 
+            // Settings are auto-saved by toggle listeners, just mark as saved
+            hasUnsavedChanges = false
+
             // Success feedback
             saveButton.text = "Saved!"
-            hasUnsavedChanges = false
 
             // Return to main activity after brief delay
             kotlinx.coroutines.delay(500)

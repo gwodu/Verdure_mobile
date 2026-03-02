@@ -8,21 +8,35 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
 import com.verdure.data.NotificationData
+import com.verdure.data.NotificationFilter
+import com.verdure.data.NotificationRepository
 import com.verdure.data.NotificationSummaryStore
+import com.verdure.data.UserContextManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 /**
  * NotificationListenerService that captures all notifications posted to the device.
  * Provides access to notifications via a StateFlow for reactive UI updates.
+ * 
+ * Now persists ALL notifications to Room database for 24-hour retention.
  */
 class VerdureNotificationListener : NotificationListenerService() {
 
+    private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
+    private lateinit var notificationRepository: NotificationRepository
+    private lateinit var notificationFilter: NotificationFilter
+    
     companion object {
         private const val TAG = "VerdureNotifListener"
 
-        // StateFlow to hold the list of notifications
+        // StateFlow to hold the list of notifications (for backwards compatibility)
         private val _notifications = MutableStateFlow<List<NotificationData>>(emptyList())
         val notifications: StateFlow<List<NotificationData>> = _notifications.asStateFlow()
 
@@ -36,6 +50,7 @@ class VerdureNotificationListener : NotificationListenerService() {
         /**
          * Dismiss notifications that Verdure already processed.
          * Only clearable notifications are removed; ongoing/system items are skipped.
+         * Marks notifications as dismissed in Room database before clearing from tray.
          */
         fun dismissViewedNotifications(notifications: List<NotificationData>): Int {
             val listener = listenerInstance
@@ -53,10 +68,14 @@ class VerdureNotificationListener : NotificationListenerService() {
             }
 
             var dismissedCount = 0
+            val dismissedKeys = mutableListOf<String>()
+            
             dismissibleNotifications.forEach { notification ->
                 try {
+                    // Cancel from system tray
                     listener.cancelNotification(notification.systemKey)
                     removeFromCacheBySystemKey(notification.systemKey)
+                    dismissedKeys.add(notification.systemKey)
                     dismissedCount++
                 } catch (e: Exception) {
                     Log.w(
@@ -64,6 +83,13 @@ class VerdureNotificationListener : NotificationListenerService() {
                         "Failed to dismiss ${notification.appName} (${notification.systemKey})",
                         e
                     )
+                }
+            }
+
+            // Mark as dismissed in Room (persists for 24h even though cleared from tray)
+            if (dismissedKeys.isNotEmpty() && listener.::notificationRepository.isInitialized) {
+                listener.serviceScope.launch {
+                    listener.notificationRepository.markMultipleDismissed(dismissedKeys)
                 }
             }
 
@@ -83,6 +109,19 @@ class VerdureNotificationListener : NotificationListenerService() {
         super.onListenerConnected()
         listenerInstance = this
         Log.d(TAG, "Notification Listener Connected")
+
+        // Initialize repository and filter
+        notificationRepository = NotificationRepository.getInstance(applicationContext)
+        val contextManager = UserContextManager.getInstance(applicationContext)
+        val userContext = runBlocking {
+            contextManager.loadContext()
+        }
+        notificationFilter = NotificationFilter(userContext)
+
+        // Clean up old notifications on startup
+        serviceScope.launch {
+            notificationRepository.cleanupOldNotifications()
+        }
 
         // Load existing notifications when service connects
         loadExistingNotifications()
@@ -108,6 +147,14 @@ class VerdureNotificationListener : NotificationListenerService() {
             currentList.removeAll { it.systemKey == notificationData.systemKey }
             currentList.add(0, notificationData)
             _notifications.value = currentList
+            
+            // Persist to Room database with priority score
+            if (::notificationRepository.isInitialized && ::notificationFilter.isInitialized) {
+                serviceScope.launch {
+                    val score = notificationFilter.scoreNotification(notificationData)
+                    notificationRepository.storeNotification(notificationData, score)
+                }
+            }
         }
     }
 
