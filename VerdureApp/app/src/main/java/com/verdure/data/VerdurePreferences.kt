@@ -105,6 +105,7 @@ class VerdurePreferences(context: Context) {
         }
         
         // Exclude calendar invites if enabled
+        // Note: Notification.CATEGORY_EVENT = "event" (Android constant)
         if (excludeCalendarFromDismiss && notification.category == "event") {
             return false
         }

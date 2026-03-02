@@ -212,6 +212,7 @@ class NotificationSummarizationService : Service() {
         // Filter notifications that should be dismissed based on settings
         val dismissibleNotifications = notifications.filter { notif ->
             // Exclude calendar events if setting is enabled
+            // Note: Notification.CATEGORY_EVENT = "event" (Android constant)
             val isCalendarEvent = notif.category == "event"
             val shouldExclude = isCalendarEvent && preferences.excludeCalendarFromDismiss
             
