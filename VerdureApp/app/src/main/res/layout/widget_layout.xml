@@ -30,7 +30,7 @@
             android:id="@+id/widget_subtitle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Critical"
+            android:text="Top Priorities"
             android:textSize="11sp"
             android:textColor="@color/text_secondary"
             android:textStyle="bold"

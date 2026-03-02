@@ -18,8 +18,8 @@ import java.util.Locale
 /**
  * Verdure Widget Provider
  * 
- * Displays LLM-summarized CRITICAL priority notifications on the home screen.
- * Updates automatically when new CRITICAL notifications arrive via NotificationSummarizationService.
+ * Displays LLM-summarized top priority notifications on the home screen.
+ * Updates automatically when new notifications arrive via NotificationSummarizationService.
  */
 class VerdureWidgetProvider : AppWidgetProvider() {
     
@@ -113,8 +113,8 @@ class VerdureWidgetProvider : AppWidgetProvider() {
             
             Log.d(TAG, "Widget updated with summary (${summary.notificationIds.size} notifications)")
         } else {
-            // Empty state: No critical notifications
-            views.setTextViewText(R.id.widget_summary, "✓ All clear!\n\nNo urgent notifications")
+            // Empty state: No notifications available
+            views.setTextViewText(R.id.widget_summary, "No notifications yet\n\nCheck back soon")
             views.setTextViewText(R.id.widget_timestamp, "")
             
             Log.d(TAG, "Widget updated with empty state")

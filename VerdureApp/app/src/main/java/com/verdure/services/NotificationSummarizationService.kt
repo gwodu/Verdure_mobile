@@ -23,12 +23,12 @@ import kotlinx.coroutines.runBlocking
 
 /**
  * Background service that monitors notifications and automatically triggers LLM summarization
- * for CRITICAL priority notifications (score >= 15).
+ * for the top priority notifications.
  *
  * Features:
  * - Monitors VerdureNotificationListener.notifications StateFlow
- * - Filters for CRITICAL priority (score >= 15)
- * - Triggers LLM immediately when critical notification arrives
+ * - Always shows top N highest-scoring notifications (even if scores are low)
+ * - Triggers LLM to summarize top priorities for widget display
  * - Stores summary in SharedPreferences for widget access
  * - Falls back to truncated raw notification if LLM fails
  */
@@ -45,8 +45,8 @@ class NotificationSummarizationService : Service() {
     
     companion object {
         private const val TAG = "NotifSummarizationSvc"
-        private const val CRITICAL_THRESHOLD = 15  // Score threshold for immediate LLM processing
-        private const val MAX_NOTIFICATIONS_TO_SUMMARIZE = 5  // Top N critical notifications
+        private const val TOP_PRIORITIES_COUNT = 5  // Show top N highest-scoring notifications
+        private const val MIN_SCORE_TO_SHOW = -5  // Include everything (even negative scores)
         private const val RAW_NOTIFICATION_MAX_LENGTH = 100  // Truncation length for fallback
         private const val DEBOUNCE_DELAY_MS = 1000L  // Wait 1 second to batch multiple notifications (reduced for faster updates)
     }
@@ -133,46 +133,41 @@ class NotificationSummarizationService : Service() {
     }
     
     /**
-     * Process notifications: filter for CRITICAL priority and trigger LLM if needed.
+     * Process notifications: show top N highest-scoring priorities and trigger LLM.
      * Also checks for incentive matches (two-pass processing).
      */
     private suspend fun processNotifications(notifications: List<NotificationData>) {
         if (notifications.isEmpty()) {
+            Log.d(TAG, "No notifications available")
+            summaryStore.clearSummaries()
+            updateWidget()
             return
         }
         
-        // PASS 1: Score and filter for CRITICAL priority (score >= 15)
-        val criticalNotifications = notifications
+        // PASS 1: Score all notifications and take top N highest-scoring ones
+        val topPriorityNotifications = notifications
             .map { it to notificationFilter.scoreNotification(it) }
-            .filter { (_, score) -> score >= CRITICAL_THRESHOLD }
             .sortedByDescending { (_, score) -> score }
-            .take(MAX_NOTIFICATIONS_TO_SUMMARIZE)
+            .take(TOP_PRIORITIES_COUNT)
             .map { (notif, score) -> 
-                Log.d(TAG, "Critical notification (score $score): ${notif.appName} - ${notif.title}")
+                Log.d(TAG, "Top priority notification (score $score): ${notif.appName} - ${notif.title}")
                 notif
             }
         
-        if (criticalNotifications.isEmpty()) {
-            Log.d(TAG, "No critical notifications to summarize")
-            // Clear widget to show "all clear" state
-            summaryStore.clearSummaries()
-            updateWidget()
-        }
-        
-        // Check if we've already summarized these notifications
-        val newNotifications = criticalNotifications.filter { notif ->
+        // Check if we've already summarized these exact notifications
+        val newNotifications = topPriorityNotifications.filter { notif ->
             !summaryStore.hasBeenSummarized(notif.id)
         }
         
         if (newNotifications.isNotEmpty()) {
-            Log.d(TAG, "Found ${newNotifications.size} new critical notifications to summarize")
+            Log.d(TAG, "Found ${newNotifications.size} new top priority notifications to summarize")
             // Trigger LLM summarization for widget
             summarizeNotifications(newNotifications)
         } else {
-            Log.d(TAG, "All critical notifications already summarized")
+            Log.d(TAG, "All top priority notifications already summarized")
         }
         
-        // PASS 2: Check for incentive matches (process ALL notifications, not just critical)
+        // PASS 2: Check for incentive matches (process ALL notifications, not just top priorities)
         processIncentiveMatches(notifications)
     }
     
@@ -302,7 +297,7 @@ class NotificationSummarizationService : Service() {
         }
         
         return """
-Summarize these urgent notifications for a home screen widget. Be EXTREMELY concise.
+Summarize these top priority notifications for a home screen widget. Be EXTREMELY concise.
 
 Notifications:
 $notifList
