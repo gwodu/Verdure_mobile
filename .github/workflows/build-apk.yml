@@ -22,10 +22,10 @@ jobs:
         distribution: 'temurin'
 
     - name: Inject Firebase config
-      if: secrets.FIREBASE_CONFIG != ''
+      if: ${{ secrets.FIREBASE_CONFIG }}
       run: |
         echo "${{ secrets.FIREBASE_CONFIG }}" > VerdureApp/app/google-services.json
-        echo "Firebase config injected from secrets"
+        echo "✓ Firebase config injected from secrets"
 
     - name: Grant execute permission for gradlew
       working-directory: ./VerdureApp
@@ -49,7 +49,7 @@ jobs:
         retention-days: 30
 
     - name: Upload APK to Firebase App Distribution
-      if: secrets.FIREBASE_CONFIG != '' && secrets.FIREBASE_APP_ID != '' && github.ref == 'refs/heads/main'
+      if: ${{ secrets.FIREBASE_CONFIG && secrets.FIREBASE_APP_ID && secrets.FIREBASE_TOKEN && github.ref == 'refs/heads/main' }}
       working-directory: ./VerdureApp
       env:
         FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}

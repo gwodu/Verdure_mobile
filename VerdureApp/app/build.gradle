@@ -2,9 +2,10 @@ plugins {
     id 'com.android.application'
     id 'kotlin-android'
     id 'org.jetbrains.kotlin.plugin.serialization' version '2.2.0'
-    id 'com.google.gms.google-services'
-    id 'com.google.firebase.appdistribution'
 }
+
+// Apply Firebase plugins conditionally (only if google-services.json exists)
+apply from: '../firebase-config.gradle'
 
 android {
     namespace 'com.verdure'
@@ -21,17 +22,8 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            firebaseAppDistribution {
-                artifactType = "APK"
-                releaseNotesFile = "../RELEASE_NOTES.txt"
-                groups = "testers"
-            }
         }
         debug {
-            firebaseAppDistribution {
-                artifactType = "APK"
-                groups = "testers"
-            }
         }
     }
     
@@ -57,11 +49,6 @@ dependencies {
 
     // Kotlin serialization for JSON handling
     implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0'
-
-    // Firebase BOM for dependency management
-    implementation platform('com.google.firebase:firebase-bom:33.7.0')
-    implementation 'com.google.firebase:firebase-analytics'
-    implementation 'com.google.firebase:firebase-crashlytics'
 
     // AI Edge SDK for Gemini Nano (DEPRECATED - non-functional on Pixel 8A)
     // implementation 'com.google.ai.edge.aicore:aicore:0.0.1-exp01'
