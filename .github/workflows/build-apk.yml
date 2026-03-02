@@ -21,6 +21,12 @@ jobs:
         java-version: '21'
         distribution: 'temurin'
 
+    - name: Inject Firebase config
+      if: secrets.FIREBASE_CONFIG != ''
+      run: |
+        echo "${{ secrets.FIREBASE_CONFIG }}" > VerdureApp/app/google-services.json
+        echo "Firebase config injected from secrets"
+
     - name: Grant execute permission for gradlew
       working-directory: ./VerdureApp
       run: chmod +x gradlew
@@ -35,12 +41,23 @@ jobs:
       working-directory: ./VerdureApp
       run: ./gradlew assembleDebug --stacktrace
 
-    - name: Upload APK
+    - name: Upload APK to GitHub Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: verdure-debug-apk
         path: VerdureApp/app/build/outputs/apk/debug/app-debug.apk
         retention-days: 30
+
+    - name: Upload APK to Firebase App Distribution
+      if: secrets.FIREBASE_CONFIG != '' && secrets.FIREBASE_APP_ID != '' && github.ref == 'refs/heads/main'
+      working-directory: ./VerdureApp
+      env:
+        FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+      run: |
+        ./gradlew appDistributionUploadDebug \
+          --firebaseAppId=${{ secrets.FIREBASE_APP_ID }} \
+          --releaseNotes="Automated build from commit ${{ github.sha }}" \
+          --groups="testers"
 
     - name: Upload build reports on failure
       if: failure()

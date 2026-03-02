@@ -4,3 +4,7 @@ android-tools/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Firebase - Do not commit real credentials
+# google-services.json is placeholder, real file added via GitHub Secrets
+VerdureApp/app/google-services.json
