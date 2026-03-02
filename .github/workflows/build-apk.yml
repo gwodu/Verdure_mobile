@@ -21,6 +21,17 @@ jobs:
         java-version: '21'
         distribution: 'temurin'
 
+    - name: Inject Firebase config
+      env:
+        FIREBASE_CONFIG: ${{ secrets.FIREBASE_CONFIG }}
+      run: |
+        if [ -n "$FIREBASE_CONFIG" ]; then
+          echo "$FIREBASE_CONFIG" > VerdureApp/app/google-services.json
+          echo "✓ Firebase config injected from secrets"
+        else
+          echo "⚠ No Firebase config found - building without Firebase features"
+        fi
+
     - name: Grant execute permission for gradlew
       working-directory: ./VerdureApp
       run: chmod +x gradlew
@@ -35,12 +46,32 @@ jobs:
       working-directory: ./VerdureApp
       run: ./gradlew assembleDebug --stacktrace
 
-    - name: Upload APK
+    - name: Upload APK to GitHub Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: verdure-debug-apk
         path: VerdureApp/app/build/outputs/apk/debug/app-debug.apk
         retention-days: 30
+
+    - name: Upload APK to Firebase App Distribution
+      if: github.ref == 'refs/heads/main'
+      working-directory: ./VerdureApp
+      env:
+        FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+        FIREBASE_CONFIG: ${{ secrets.FIREBASE_CONFIG }}
+      run: |
+        if [ -n "$FIREBASE_CONFIG" ] && [ -n "$FIREBASE_APP_ID" ] && [ -n "$FIREBASE_TOKEN" ]; then
+          echo "✓ Firebase secrets configured - uploading to App Distribution"
+          ./gradlew appDistributionUploadDebug \
+            --firebaseAppId="$FIREBASE_APP_ID" \
+            --releaseNotes="Automated build from commit ${{ github.sha }}" \
+            --groups="testers"
+        else
+          echo "⚠ Firebase secrets not configured - skipping upload"
+          echo "  To enable: Add FIREBASE_CONFIG, FIREBASE_APP_ID, FIREBASE_TOKEN to GitHub Secrets"
+          echo "  See FIREBASE_SETUP.md for instructions"
+        fi
 
     - name: Upload build reports on failure
       if: failure()

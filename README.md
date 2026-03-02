@@ -12,23 +12,41 @@ Verdure is an Android app that provides intelligent, privacy-first assistance th
 - **Tool-based architecture**: Extensible system where capabilities are modularized
 - **On-device LLM**: Qwen 3 0.6B running entirely on your phone via Cactus SDK
 
-## Building the App
+## Installation
 
-### Automated Build (Recommended)
+### For Testers: 1-Click Install Link
 
-All builds are automated through GitHub Actions:
+**Coming soon:** Firebase App Distribution link for easy installation
 
-1. Push code to the repository
-2. GitHub Actions automatically builds the APK
-3. Download APK from: https://github.com/gwodu/Verdure/actions
+Once configured, you'll get a shareable link like:
+```
+https://appdistribution.firebase.dev/i/abc123def456
+```
 
-### Local Build (Optional)
+Testers just click → sign in with Google → tap "Download" → install!
 
+### For Developers: Build from Source
+
+**Option 1: Download from GitHub Actions**
+1. Go to https://github.com/gwodu/Verdure/actions
+2. Click latest workflow run
+3. Download `verdure-debug-apk` artifact
+4. Install on your device
+
+**Option 2: Local Build**
 ```bash
 cd VerdureApp
-./gradlew clean
 ./gradlew assembleDebug --no-daemon --max-workers=2
+adb install app/build/outputs/apk/debug/app-debug.apk
 ```
+
+## Setting Up Firebase Distribution (For Maintainers)
+
+**Want to enable 1-click install links for your testers?**
+
+See **[DISTRIBUTION_QUICKSTART.md](DISTRIBUTION_QUICKSTART.md)** for a 15-minute setup guide.
+
+Full documentation: [FIREBASE_SETUP.md](FIREBASE_SETUP.md)
 
 ## Setting Up the AI Model
 

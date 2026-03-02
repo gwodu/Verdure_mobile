@@ -1,0 +1,14 @@
+// Conditionally apply Firebase plugins only if google-services.json exists
+// This allows builds to succeed without Firebase configuration
+
+def googleServicesFile = file('app/google-services.json')
+def hasValidFirebaseConfig = googleServicesFile.exists() && googleServicesFile.text.contains('"project_id"')
+
+if (hasValidFirebaseConfig) {
+    println "✓ Firebase config found - enabling Firebase plugins"
+    apply plugin: 'com.google.gms.google-services'
+    apply plugin: 'com.google.firebase.appdistribution'
+} else {
+    println "⚠ Firebase config not found - Firebase features disabled (build will still succeed)"
+    println "  To enable Firebase App Distribution, see FIREBASE_SETUP.md"
+}

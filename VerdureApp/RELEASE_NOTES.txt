@@ -1,0 +1,16 @@
+Verdure - Privacy-First AI Assistant
+
+Latest features:
+- On-device AI powered by Qwen 3 0.6B (via Cactus SDK)
+- Smart notification prioritization with 15+ factor scoring
+- Conversational priority updates ("prioritize emails from work")
+- Home screen widget for critical notifications
+- Auto-dismiss processed notifications
+- Beautiful minimalist chat interface
+
+Setup required:
+1. Grant notification access permission
+2. Grant calendar access permission (optional)
+3. Wait for Qwen model to download on first launch (~600MB)
+
+For full setup guide, visit: https://github.com/gwodu/Verdure
