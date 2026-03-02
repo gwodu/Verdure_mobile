@@ -10,7 +10,9 @@ import com.verdure.core.CactusLLMEngine
 import com.verdure.data.NotificationData
 import com.verdure.data.NotificationFilter
 import com.verdure.data.NotificationSummaryStore
+import com.verdure.data.StoredNotification
 import com.verdure.data.UserContextManager
+import com.verdure.data.VerdurePreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -35,6 +37,7 @@ class NotificationSummarizationService : Service() {
     private lateinit var llmEngine: CactusLLMEngine
     private lateinit var notificationFilter: NotificationFilter
     private lateinit var summaryStore: NotificationSummaryStore
+    private lateinit var preferences: VerdurePreferences
     
     private var processingJob: Job? = null
     
@@ -77,6 +80,9 @@ class NotificationSummarizationService : Service() {
             
             // Initialize summary store
             summaryStore = NotificationSummaryStore(applicationContext)
+            
+            // Initialize preferences
+            preferences = VerdurePreferences.getInstance(applicationContext)
             
             // Start monitoring notifications
             startMonitoring()
@@ -197,9 +203,29 @@ class NotificationSummarizationService : Service() {
     }
 
     private fun dismissProcessedNotifications(notifications: List<NotificationData>) {
-        val dismissedCount = VerdureNotificationListener.dismissViewedNotifications(notifications)
+        // Check if auto-dismiss is enabled and background context is enabled
+        if (!preferences.autoDismissEnabled || !preferences.dismissAfterBackground) {
+            Log.d(TAG, "Auto-dismiss disabled for background context - keeping notifications")
+            return
+        }
+        
+        // Filter notifications that should be dismissed based on settings
+        val dismissibleNotifications = notifications.filter { notif ->
+            // Exclude calendar events if setting is enabled
+            val isCalendarEvent = notif.category == "event"
+            val shouldExclude = isCalendarEvent && preferences.excludeCalendarFromDismiss
+            
+            !shouldExclude && notif.isClearable
+        }
+        
+        if (dismissibleNotifications.isEmpty()) {
+            Log.d(TAG, "No notifications eligible for dismissal after filtering")
+            return
+        }
+        
+        val dismissedCount = VerdureNotificationListener.dismissViewedNotifications(dismissibleNotifications)
         if (dismissedCount > 0) {
-            Log.d(TAG, "Auto-dismissed $dismissedCount summarized notifications")
+            Log.d(TAG, "Auto-dismissed $dismissedCount summarized notifications (respecting settings)")
         }
     }
     

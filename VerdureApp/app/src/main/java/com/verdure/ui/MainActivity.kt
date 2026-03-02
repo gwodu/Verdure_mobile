@@ -21,6 +21,7 @@ import com.cactus.CactusContextInitializer
 import com.verdure.core.CactusLLMEngine
 import com.verdure.core.VerdureAI
 import com.verdure.data.InstalledAppsManager
+import com.verdure.data.NotificationRepository
 import com.verdure.data.UserContextManager
 import com.verdure.services.VerdureNotificationListener
 import com.verdure.tools.AppPrioritizationTool
@@ -66,6 +67,9 @@ class MainActivity : AppCompatActivity() {
         sendButton.isEnabled = false
         chatInput.isEnabled = false
 
+        // Clean up old notifications on app startup (24h TTL)
+        cleanupOldNotifications()
+
         // Initialize AI components
         initializeAI()
 
@@ -98,6 +102,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Clean up notifications older than 24 hours from Room database.
+     * Runs on app startup to maintain storage efficiency.
+     */
+    private fun cleanupOldNotifications() {
+        lifecycleScope.launch {
+            try {
+                val repository = NotificationRepository.getInstance(applicationContext)
+                repository.cleanupOldNotifications()
+            } catch (e: Exception) {
+                // Cleanup failure is non-critical, just log
+                android.util.Log.e("MainActivity", "Failed to cleanup old notifications", e)
+            }
+        }
+    }
+
+    /**
      * Initialize the LLM engine and VerdureAI orchestrator.
      */
     private fun initializeAI() {
@@ -117,8 +137,8 @@ class MainActivity : AppCompatActivity() {
                 // Create VerdureAI orchestrator with context
                 verdureAI = VerdureAI(llmEngine, contextManager)
 
-                // Register tools
-                verdureAI.registerTool(NotificationTool(llmEngine, contextManager))
+                // Register tools (NotificationTool needs context for Room access)
+                verdureAI.registerTool(NotificationTool(applicationContext, llmEngine, contextManager))
                 verdureAI.registerTool(AppPrioritizationTool(contextManager, appsManager))
 
                 println("✅ Verdure AI initialized successfully")
