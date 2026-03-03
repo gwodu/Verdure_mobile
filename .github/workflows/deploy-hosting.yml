@@ -31,9 +31,12 @@ jobs:
           firebase deploy --only hosting --project "$FIREBASE_PROJECT_ID" --token "$FIREBASE_TOKEN" --non-interactive
 
       - name: Show Demo URL
-        if: ${{ success() && secrets.FIREBASE_PROJECT_ID != '' }}
         env:
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
         run: |
+          if [ -z "$FIREBASE_PROJECT_ID" ]; then
+            echo "FIREBASE_PROJECT_ID secret is missing."
+            exit 0
+          fi
           echo "Demo URL: https://${FIREBASE_PROJECT_ID}.web.app"
           echo "Alternate URL: https://${FIREBASE_PROJECT_ID}.firebaseapp.com"
