@@ -63,10 +63,13 @@ jobs:
       run: |
         if [ -n "$FIREBASE_CONFIG" ] && [ -n "$FIREBASE_APP_ID" ] && [ -n "$FIREBASE_TOKEN" ]; then
           echo "✓ Firebase secrets configured - uploading to App Distribution"
-          ./gradlew :app:appDistributionUploadDebug \
-            --firebaseAppId="$FIREBASE_APP_ID" \
-            --releaseNotes="Automated build from commit ${{ github.sha }}" \
-            --groups="testers"
+          npm install -g firebase-tools
+          firebase appdistribution:distribute \
+            app/build/outputs/apk/debug/app-debug.apk \
+            --app "$FIREBASE_APP_ID" \
+            --groups "testers" \
+            --release-notes "Automated build from commit ${{ github.sha }}" \
+            --token "$FIREBASE_TOKEN"
         else
           echo "⚠ Firebase secrets not configured - skipping upload"
           echo "  To enable: Add FIREBASE_CONFIG, FIREBASE_APP_ID, FIREBASE_TOKEN to GitHub Secrets"
