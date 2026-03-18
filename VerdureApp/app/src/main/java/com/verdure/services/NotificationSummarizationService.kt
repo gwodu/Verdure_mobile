@@ -1,7 +1,6 @@
 package com.verdure.services
 
 import android.app.Service
-import android.appwidget.AppWidgetManager
 import android.content.Intent
 import android.os.IBinder
 import android.util.Log
@@ -10,10 +9,10 @@ import com.verdure.core.CactusLLMEngine
 import com.verdure.data.NotificationData
 import com.verdure.data.NotificationFilter
 import com.verdure.data.NotificationSummaryStore
-import com.verdure.data.StoredNotification
 import com.verdure.data.UserContextManager
 import com.verdure.data.VerdurePreferences
 import com.verdure.tools.IncentiveTool
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -42,6 +41,8 @@ class NotificationSummarizationService : Service() {
     private lateinit var incentiveTool: IncentiveTool
     
     private var processingJob: Job? = null
+    private val isProcessing = AtomicBoolean(false)
+    private var pendingNotifications: List<NotificationData>? = null
     
     companion object {
         private const val TAG = "NotifSummarizationSvc"
@@ -116,18 +117,45 @@ class NotificationSummarizationService : Service() {
     /**
      * Start monitoring notifications from VerdureNotificationListener.
      * Uses debouncing to batch multiple rapid notifications together.
+     * If LLM processing is already in progress, stashes the latest batch
+     * and re-processes once the current run finishes.
      */
     private fun startMonitoring() {
         scope.launch {
             VerdureNotificationListener.notifications.collect { allNotifications ->
-                // Cancel any pending processing job
+                // Cancel any pending debounce (hasn't started LLM work yet)
                 processingJob?.cancel()
                 
-                // Schedule new processing with debounce delay
                 processingJob = launch {
                     delay(DEBOUNCE_DELAY_MS)
-                    processNotifications(allNotifications)
+
+                    if (isProcessing.get()) {
+                        Log.d(TAG, "LLM already busy, stashing notification batch for later")
+                        pendingNotifications = allNotifications
+                        return@launch
+                    }
+
+                    runProcessing(allNotifications)
                 }
+            }
+        }
+    }
+
+    /**
+     * Runs processNotifications with re-entrancy guard.
+     * After finishing, checks if a newer batch was stashed while we were busy.
+     */
+    private suspend fun runProcessing(notifications: List<NotificationData>) {
+        isProcessing.set(true)
+        try {
+            processNotifications(notifications)
+        } finally {
+            isProcessing.set(false)
+            val pending = pendingNotifications
+            if (pending != null) {
+                pendingNotifications = null
+                Log.d(TAG, "Processing stashed notification batch")
+                runProcessing(pending)
             }
         }
     }
