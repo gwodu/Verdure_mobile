@@ -135,6 +135,7 @@ class NotificationSummarizationService : Service() {
     /**
      * Process notifications: show top N highest-scoring priorities and trigger LLM.
      * Also checks for incentive matches (two-pass processing).
+     * Dismisses ALL eligible notifications (not just top N).
      */
     private suspend fun processNotifications(notifications: List<NotificationData>) {
         if (notifications.isEmpty()) {
@@ -144,7 +145,7 @@ class NotificationSummarizationService : Service() {
             return
         }
         
-        // PASS 1: Score all notifications and take top N highest-scoring ones
+        // PASS 1: Score all notifications and take top N highest-scoring ones for summarization
         val topPriorityNotifications = notifications
             .map { it to notificationFilter.scoreNotification(it) }
             .sortedByDescending { (_, score) -> score }
@@ -161,11 +162,14 @@ class NotificationSummarizationService : Service() {
         
         if (newNotifications.isNotEmpty()) {
             Log.d(TAG, "Found ${newNotifications.size} new top priority notifications to summarize")
-            // Trigger LLM summarization for widget
+            // Trigger LLM summarization for widget (no longer handles dismissal)
             summarizeNotifications(newNotifications)
         } else {
             Log.d(TAG, "All top priority notifications already summarized")
         }
+        
+        // Dismiss ALL eligible notifications (not just the ones that were summarized)
+        dismissProcessedNotifications(notifications)
         
         // PASS 2: Check for incentive matches (process ALL notifications, not just top priorities)
         processIncentiveMatches(notifications)
@@ -223,8 +227,6 @@ class NotificationSummarizationService : Service() {
                 summary,
                 System.currentTimeMillis()
             )
-
-            dismissProcessedNotifications(notifications)
             
             Log.d(TAG, "Successfully summarized ${notifications.size} critical notifications")
         } catch (e: Exception) {

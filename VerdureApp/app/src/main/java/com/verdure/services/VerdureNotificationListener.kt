@@ -248,6 +248,8 @@ class VerdureNotificationListener : NotificationListenerService() {
 
     /**
      * Extract relevant data from a StatusBarNotification.
+     * Handles multiple notification styles (BigText, Inbox, Messaging)
+     * to capture full content from apps like WhatsApp, Telegram, etc.
      */
     private fun extractNotificationData(sbn: StatusBarNotification): NotificationData? {
         try {
@@ -263,9 +265,11 @@ class VerdureNotificationListener : NotificationListenerService() {
                 sbn.packageName
             }
 
-            // Extract title and text
+            // Extract title and text with fallbacks for rich notification styles
             val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
-            val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+                ?: extras.getCharSequence(Notification.EXTRA_TITLE_BIG)?.toString()
+
+            val text = extractBestText(extras)
 
             // Skip if both title and text are null/empty
             if (title.isNullOrBlank() && text.isNullOrBlank()) {
@@ -308,7 +312,7 @@ class VerdureNotificationListener : NotificationListenerService() {
                 isClearable = sbn.isClearable,
                 category = notification.category,
                 priority = importance,
-                contentIntent = contentIntent,  // Capture the intent to open the app
+                contentIntent = contentIntent,
 
                 // Metadata for enhanced scoring
                 hasActions = hasActions,
@@ -319,5 +323,31 @@ class VerdureNotificationListener : NotificationListenerService() {
             Log.e(TAG, "Error extracting notification data", e)
             return null
         }
+    }
+
+    /**
+     * Extract the best available text from notification extras.
+     * WhatsApp, Telegram, and other messaging apps use different styles:
+     * - EXTRA_BIG_TEXT: BigTextStyle (expanded single message)
+     * - EXTRA_TEXT_LINES: InboxStyle (multiple messages summary)
+     * - EXTRA_TEXT: Standard short text
+     */
+    private fun extractBestText(extras: android.os.Bundle): String? {
+        // Priority 1: BigTextStyle - contains the full expanded text
+        val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
+        if (!bigText.isNullOrBlank()) {
+            return bigText
+        }
+
+        // Priority 2: InboxStyle text lines - multiple messages grouped together
+        val textLines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
+        if (textLines != null && textLines.isNotEmpty()) {
+            return textLines.mapNotNull { it?.toString() }
+                .filter { it.isNotBlank() }
+                .joinToString(" | ")
+        }
+
+        // Priority 3: Standard text field
+        return extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
     }
 }
