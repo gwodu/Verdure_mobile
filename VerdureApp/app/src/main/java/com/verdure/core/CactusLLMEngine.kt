@@ -1,6 +1,7 @@
 package com.verdure.core
 
 import android.content.Context
+import android.util.Log
 import com.cactus.CactusCompletionParams
 import com.cactus.CactusContextInitializer
 import com.cactus.CactusInitParams
@@ -8,6 +9,8 @@ import com.cactus.CactusLM
 import com.cactus.ChatMessage
 import com.cactus.InferenceMode
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -19,8 +22,10 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
 
     private var cactusLM: CactusLM? = null
     private var isInitialized = false
+    private val inferenceMutex = Mutex()
 
     companion object {
+        private const val TAG = "CactusLLMEngine"
         private const val MODEL_SLUG = "qwen3-0.6"
         private const val CONTEXT_SIZE = 2048
         private const val MAX_TOKENS = 2048
@@ -75,28 +80,32 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
             return "Error: LLM not initialized. Please allow model download and retry."
         }
 
-        return withContext(Dispatchers.IO) {
-            try {
-                val result = lm.generateCompletion(
-                    messages = listOf(
-                        ChatMessage(content = prompt, role = "user")
-                    ),
-                    params = CactusCompletionParams(
-                        maxTokens = MAX_TOKENS,
-                        temperature = TEMPERATURE,
-                        topK = TOP_K,
-                        mode = InferenceMode.LOCAL
+        return inferenceMutex.withLock {
+            withContext(Dispatchers.IO) {
+                try {
+                    Log.d(TAG, "Starting native inference (prompt length: ${prompt.length} chars)")
+                    val result = lm.generateCompletion(
+                        messages = listOf(
+                            ChatMessage(content = prompt, role = "user")
+                        ),
+                        params = CactusCompletionParams(
+                            maxTokens = MAX_TOKENS,
+                            temperature = TEMPERATURE,
+                            topK = TOP_K,
+                            mode = InferenceMode.LOCAL
+                        )
                     )
-                )
+                    Log.d(TAG, "Native inference completed")
 
-                if (result?.success == true) {
-                    result.response?.trim().orEmpty()
-                } else {
-                    "Error: LLM generation failed"
+                    if (result?.success == true) {
+                        result.response?.trim().orEmpty()
+                    } else {
+                        "Error: LLM generation failed"
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Native inference error", e)
+                    "Error: ${e.message}"
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                "Error: ${e.message}"
             }
         }
     }
