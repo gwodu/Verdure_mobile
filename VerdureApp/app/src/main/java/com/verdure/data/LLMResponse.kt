@@ -1,46 +1,58 @@
 package com.verdure.data
 
 /**
- * Parsed LLM response with optional thinking section
+ * Parsed LLM response with optional thinking section.
+ * Handles multiple tag formats from different models:
+ * - <thinking>/<think> for reasoning (Qwen uses <think>)
+ * - <response>/<answer> for final output
  */
 data class LLMResponse(
     val thinking: String?,
     val response: String
 ) {
     companion object {
-        /**
-         * Parse LLM output that may contain thinking and response sections
-         * 
-         * Expected format (but flexible):
-         * <thinking>...</thinking>
-         * <response>...</response>
-         * 
-         * Or just plain text if no sections found
-         */
+
+        private val THINKING_REGEX = Regex(
+            "<(?:thinking|think)>(.*?)</(?:thinking|think)>",
+            RegexOption.DOT_MATCHES_ALL
+        )
+
+        private val RESPONSE_REGEX = Regex(
+            "<(?:response|answer)>(.*?)</(?:response|answer)>",
+            RegexOption.DOT_MATCHES_ALL
+        )
+
+        private val ALL_KNOWN_TAGS = Regex(
+            "</?(?:thinking|think|response|answer)>",
+            RegexOption.IGNORE_CASE
+        )
+
         fun parse(rawOutput: String): LLMResponse {
-            // Try to extract thinking section
-            val thinkingMatch = Regex("<thinking>(.*?)</thinking>", RegexOption.DOT_MATCHES_ALL)
-                .find(rawOutput)
-            val thinking = thinkingMatch?.groupValues?.get(1)?.trim()
-            
-            // Try to extract response section
-            val responseMatch = Regex("<response>(.*?)</response>", RegexOption.DOT_MATCHES_ALL)
-                .find(rawOutput)
-            val response = responseMatch?.groupValues?.get(1)?.trim()
-            
-            return if (response != null) {
-                // Found structured response
-                LLMResponse(thinking, response)
-            } else if (thinking != null) {
-                // Found only thinking, treat rest as response
-                val remainingText = rawOutput
-                    .replace(Regex("<thinking>.*?</thinking>", RegexOption.DOT_MATCHES_ALL), "")
-                    .trim()
-                LLMResponse(thinking, remainingText.ifEmpty { rawOutput })
-            } else {
-                // No structure found, treat entire output as response
-                LLMResponse(null, rawOutput.trim())
+            val thinking = THINKING_REGEX.find(rawOutput)?.groupValues?.get(1)?.trim()
+            val response = RESPONSE_REGEX.find(rawOutput)?.groupValues?.get(1)?.trim()
+
+            return when {
+                response != null -> {
+                    LLMResponse(thinking, stripTags(response))
+                }
+                thinking != null -> {
+                    val remainingText = rawOutput
+                        .replace(THINKING_REGEX, "")
+                        .let { stripTags(it) }
+                        .trim()
+                    LLMResponse(thinking, remainingText.ifEmpty { rawOutput.trim() })
+                }
+                else -> {
+                    LLMResponse(null, stripTags(rawOutput).trim())
+                }
             }
+        }
+
+        /**
+         * Remove any leftover known tags so the user never sees raw markup.
+         */
+        private fun stripTags(text: String): String {
+            return text.replace(ALL_KNOWN_TAGS, "").trim()
         }
     }
 }
