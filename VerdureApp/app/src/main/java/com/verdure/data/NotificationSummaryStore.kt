@@ -24,17 +24,18 @@ class NotificationSummaryStore(context: Context) {
     data class Summary(
         val notificationIds: List<Int>,
         val text: String,
-        val timestamp: Long
+        val timestamp: Long,
+        val maxScore: Int = 0
     )
     
     /**
      * Save a new summary with automatic cleanup of expired summaries.
      */
-    fun saveSummary(notificationIds: List<Int>, text: String, timestamp: Long) {
+    fun saveSummary(notificationIds: List<Int>, text: String, timestamp: Long, maxScore: Int = 0) {
         // Clean up expired summaries before saving new one
         cleanupExpiredSummaries()
         
-        val summary = Summary(notificationIds, text, timestamp)
+        val summary = Summary(notificationIds, text, timestamp, maxScore)
         
         try {
             prefs.edit()

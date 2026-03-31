@@ -6,6 +6,7 @@ import android.os.IBinder
 import android.util.Log
 import com.cactus.CactusContextInitializer
 import com.verdure.core.CactusLLMEngine
+import com.verdure.data.LLMResponse
 import com.verdure.data.NotificationData
 import com.verdure.data.NotificationFilter
 import com.verdure.data.NotificationSummaryStore
@@ -50,6 +51,8 @@ class NotificationSummarizationService : Service() {
         private const val MIN_SCORE_TO_SHOW = -5  // Include everything (even negative scores)
         private const val RAW_NOTIFICATION_MAX_LENGTH = 100  // Truncation length for fallback
         private const val DEBOUNCE_DELAY_MS = 1000L  // Wait 1 second to batch multiple notifications (reduced for faster updates)
+        private const val IMPORTANT_SCORE_THRESHOLD = 5  // Only replace widget if new batch has a notification scoring >= this
+        private const val STALE_SUMMARY_MS = 5 * 60 * 1000L  // Summary older than 5 min is considered stale and can be replaced
     }
     
     override fun onCreate() {
@@ -174,14 +177,18 @@ class NotificationSummarizationService : Service() {
         }
         
         // PASS 1: Score all notifications and take top N highest-scoring ones for summarization
-        val topPriorityNotifications = notifications
+        val scoredNotifications = notifications
             .map { it to notificationFilter.scoreNotification(it) }
             .sortedByDescending { (_, score) -> score }
+        
+        val topPriorityNotifications = scoredNotifications
             .take(TOP_PRIORITIES_COUNT)
             .map { (notif, score) -> 
                 Log.d(TAG, "Top priority notification (score $score): ${notif.appName} - ${notif.title}")
                 notif
             }
+        
+        val topMaxScore = scoredNotifications.firstOrNull()?.second ?: 0
         
         // Check if we've already summarized these exact notifications
         val newNotifications = topPriorityNotifications.filter { notif ->
@@ -189,9 +196,13 @@ class NotificationSummarizationService : Service() {
         }
         
         if (newNotifications.isNotEmpty()) {
-            Log.d(TAG, "Found ${newNotifications.size} new top priority notifications to summarize")
-            // Trigger LLM summarization for widget (no longer handles dismissal)
-            summarizeNotifications(newNotifications)
+            // Check if the new notifications are important enough to replace the current widget content
+            if (shouldUpdateWidget(topMaxScore)) {
+                Log.d(TAG, "Found ${newNotifications.size} new top priority notifications to summarize (maxScore=$topMaxScore)")
+                summarizeNotifications(newNotifications, topMaxScore)
+            } else {
+                Log.d(TAG, "Skipping widget update: new notifications (maxScore=$topMaxScore) not important enough to replace current summary")
+            }
         } else {
             Log.d(TAG, "All top priority notifications already summarized")
         }
@@ -201,6 +212,39 @@ class NotificationSummarizationService : Service() {
         
         // PASS 2: Check for incentive matches (process ALL notifications, not just top priorities)
         processIncentiveMatches(notifications)
+    }
+    
+    /**
+     * Determine if the widget should be updated based on notification importance.
+     * Prevents unimportant notifications from displacing important widget content.
+     */
+    private fun shouldUpdateWidget(newMaxScore: Int): Boolean {
+        val currentSummary = summaryStore.getLatestSummary()
+        
+        // No current summary — always update
+        if (currentSummary == null) return true
+        
+        // Current summary is stale — allow update
+        val age = System.currentTimeMillis() - currentSummary.timestamp
+        if (age > STALE_SUMMARY_MS) {
+            Log.d(TAG, "Current summary is stale (${age / 1000}s old), allowing update")
+            return true
+        }
+        
+        // New batch has important notifications — allow update
+        if (newMaxScore >= IMPORTANT_SCORE_THRESHOLD) {
+            Log.d(TAG, "New batch has important notification (score=$newMaxScore >= $IMPORTANT_SCORE_THRESHOLD)")
+            return true
+        }
+        
+        // New batch scores lower than current — don't replace
+        if (newMaxScore < currentSummary.maxScore) {
+            Log.d(TAG, "New batch (maxScore=$newMaxScore) less important than current (maxScore=${currentSummary.maxScore})")
+            return false
+        }
+        
+        // Equal or slightly higher scores with fresh summary — allow update
+        return true
     }
     
     /**
@@ -235,31 +279,36 @@ class NotificationSummarizationService : Service() {
     /**
      * Summarize notifications using LLM, with fallback to raw truncated text.
      */
-    private suspend fun summarizeNotifications(notifications: List<NotificationData>) {
+    private suspend fun summarizeNotifications(notifications: List<NotificationData>, maxScore: Int = 0) {
         val prompt = buildSummarizationPrompt(notifications)
         
         try {
             // Check if LLM is initialized
             if (!::llmEngine.isInitialized) {
                 Log.w(TAG, "LLM not initialized yet - using raw fallback")
-                generateRawFallbackSummary(notifications)
+                generateRawFallbackSummary(notifications, maxScore)
                 return
             }
             
             Log.d(TAG, "Calling LLM to summarize ${notifications.size} notifications...")
-            val summary = llmEngine.generateContent(prompt)
+            val rawSummary = llmEngine.generateContent(prompt)
             
-            // Store summary
+            // Strip any thinking/output/response tags from the LLM output
+            val parsedResponse = LLMResponse.parse(rawSummary)
+            val cleanSummary = parsedResponse.response
+            
+            // Store cleaned summary
             summaryStore.saveSummary(
                 notifications.map { it.id },
-                summary,
-                System.currentTimeMillis()
+                cleanSummary,
+                System.currentTimeMillis(),
+                maxScore
             )
             
             Log.d(TAG, "Successfully summarized ${notifications.size} critical notifications")
         } catch (e: Exception) {
             Log.e(TAG, "LLM failed to summarize notifications, using raw fallback", e)
-            generateRawFallbackSummary(notifications)
+            generateRawFallbackSummary(notifications, maxScore)
         }
         
         // Trigger widget update
@@ -297,7 +346,7 @@ class NotificationSummarizationService : Service() {
     /**
      * Generate raw fallback summary when LLM is unavailable or fails.
      */
-    private fun generateRawFallbackSummary(notifications: List<NotificationData>) {
+    private fun generateRawFallbackSummary(notifications: List<NotificationData>, maxScore: Int = 0) {
         val rawSummary = notifications.joinToString("\n") { notif ->
             val text = notif.text ?: notif.title ?: ""
             val truncated = if (text.length > RAW_NOTIFICATION_MAX_LENGTH) {
@@ -311,7 +360,8 @@ class NotificationSummarizationService : Service() {
         summaryStore.saveSummary(
             notifications.map { it.id },
             rawSummary,
-            System.currentTimeMillis()
+            System.currentTimeMillis(),
+            maxScore
         )
         
         Log.d(TAG, "Saved raw fallback summary for ${notifications.size} notifications")
@@ -339,6 +389,8 @@ RULES (CRITICAL):
 - Action-focused only
 - NO app names
 - NO greetings or extra text
+- Do NOT include any XML tags like <thinking>, <output>, <response>, etc.
+- Output ONLY the bullet points, nothing else
 
 EXAMPLES:
 Input: "Gmail: Interview tomorrow 9am - Confirm"
@@ -347,8 +399,8 @@ Output: • Confirm interview tomorrow 9am
 Input: "Slack: Meeting in 15 min"
 Output: • Join meeting in 15 min
 
-Input: "Bank: Verify $500 charge"
-Output: • Verify $500 transaction
+Input: "Bank: Verify ${'$'}500 charge"
+Output: • Verify ${'$'}500 transaction
 
 Output ONLY the bullet points:
         """.trimIndent()

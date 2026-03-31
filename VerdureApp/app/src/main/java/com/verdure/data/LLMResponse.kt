@@ -18,12 +18,12 @@ data class LLMResponse(
         )
 
         private val RESPONSE_REGEX = Regex(
-            "<(?:response|answer)>(.*?)</(?:response|answer)>",
+            "<(?:response|answer|output)>(.*?)</(?:response|answer|output)>",
             RegexOption.DOT_MATCHES_ALL
         )
 
         private val ALL_KNOWN_TAGS = Regex(
-            "</?(?:thinking|think|response|answer)>",
+            "</?(?:thinking|think|response|answer|output)>",
             RegexOption.IGNORE_CASE
         )
 
