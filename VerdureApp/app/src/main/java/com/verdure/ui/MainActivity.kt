@@ -130,7 +130,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun initializeAI() {
         lifecycleScope.launch {
-            // Initialize Cactus engine (Qwen 3 0.6B)
+            // Initialize Cactus engine (Gemma 4 E2B)
             // Use Singleton instance for shared memory usage
             llmEngine = CactusLLMEngine.getInstance(applicationContext)
             val initialized = llmEngine.initialize()

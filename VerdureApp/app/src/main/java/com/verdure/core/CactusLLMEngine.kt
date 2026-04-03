@@ -14,7 +14,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * Cactus LLM backend for running Qwen 3 0.6B on-device.
+ * Cactus LLM backend for running Gemma 4 E2B on-device.
  *
  * Uses Cactus SDK for local model download and inference.
  */
@@ -26,10 +26,10 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
 
     companion object {
         private const val TAG = "CactusLLMEngine"
-        private const val MODEL_SLUG = "qwen3-0.6"
-        private const val CONTEXT_SIZE = 2048
+        private const val MODEL_SLUG = "google/gemma-4-E2B-it"
+        private const val CONTEXT_SIZE = 4096
         private const val MAX_TOKENS = 2048
-        private const val TEMPERATURE = 0.8
+        private const val TEMPERATURE = 0.7
         private const val TOP_K = 64
 
         @Volatile
