@@ -6,7 +6,7 @@ package com.verdure.core
  * This abstraction allows Verdure to swap LLM implementations without changing
  * the VerdureAI orchestrator or tools.
  *
- * Current implementation: MLCLLMEngine (Llama 3.2 via MLC LLM)
+ * Current implementation: CactusLLMEngine (Gemma 4 E2B via Cactus SDK)
  * Future: Could support other models (Gemini, Phi-3, etc.)
  */
 interface LLMEngine {
@@ -14,9 +14,11 @@ interface LLMEngine {
      * Initialize the LLM model
      * Should be called once at app startup
      *
+     * @param onProgress Optional callback invoked with human-readable status strings
+     *                   (e.g. "Downloading model…", "✅ Ready") during initialization.
      * @return true if initialization successful, false otherwise
      */
-    suspend fun initialize(): Boolean
+    suspend fun initialize(onProgress: ((String) -> Unit)? = null): Boolean
 
     /**
      * Generate content using the LLM

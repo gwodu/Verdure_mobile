@@ -127,42 +127,47 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Initialize the LLM engine and VerdureAI orchestrator.
+     * Shows a live status message in chat while the model downloads/loads.
      */
     private fun initializeAI() {
+        // Show a status bubble immediately so the user knows something is happening
+        val statusBubble = addMessageToChat(
+            "System",
+            "⏳ Loading AI model… (first launch may take a minute)",
+            null
+        )
+
         lifecycleScope.launch {
-            // Initialize Cactus engine (Gemma 4 E2B)
-            // Use Singleton instance for shared memory usage
             llmEngine = CactusLLMEngine.getInstance(applicationContext)
-            val initialized = llmEngine.initialize()
 
-            if (initialized) {
-                // Initialize user context manager
-                val contextManager = UserContextManager.getInstance(applicationContext)
+            val initialized = llmEngine.initialize { progressMessage ->
+                runOnUiThread { statusBubble.text = progressMessage }
+            }
 
-                // Initialize installed apps manager
-                val appsManager = InstalledAppsManager(applicationContext)
+            runOnUiThread {
+                if (initialized) {
+                    // Initialize user context manager
+                    val contextManager = UserContextManager.getInstance(applicationContext)
 
-                // Create VerdureAI orchestrator with context
-                verdureAI = VerdureAI(llmEngine, contextManager)
+                    // Initialize installed apps manager
+                    val appsManager = InstalledAppsManager(applicationContext)
 
-                // Register tools (NotificationTool needs context for Room access)
-                verdureAI.registerTool(NotificationTool(applicationContext, llmEngine, contextManager))
-                verdureAI.registerTool(AppPrioritizationTool(contextManager, appsManager))
+                    // Create VerdureAI orchestrator with context
+                    verdureAI = VerdureAI(llmEngine, contextManager)
 
-                println("✅ Verdure AI initialized successfully")
-                println("   Tools registered: ${verdureAI.getAvailableTools().size}")
+                    // Register tools (NotificationTool needs context for Room access)
+                    verdureAI.registerTool(NotificationTool(applicationContext, llmEngine, contextManager))
+                    verdureAI.registerTool(AppPrioritizationTool(contextManager, appsManager))
 
-                // Enable chat once AI is ready
-                runOnUiThread {
+                    // Remove the status bubble and enable chat
+                    chatHistoryContainer.removeView(statusBubble.parent as? android.view.View ?: statusBubble)
                     sendButton.isEnabled = true
                     chatInput.isEnabled = true
-                }
-            } else {
-                println("❌ Failed to initialize Verdure AI")
-                runOnUiThread {
+                } else {
+                    // Leave the error message from the callback visible
+                    statusBubble.text = "❌ Failed to load AI model. Check your internet connection and restart the app."
                     sendButton.isEnabled = false
                     chatInput.isEnabled = false
-                    addMessageToChat("System", "Failed to initialize AI. Check model setup.", null)
                 }
             }
         }

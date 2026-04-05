@@ -42,7 +42,7 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
         }
     }
 
-    override suspend fun initialize(): Boolean {
+    override suspend fun initialize(onProgress: ((String) -> Unit)? = null): Boolean {
         if (isInitialized && cactusLM?.isLoaded() == true) {
             return true
         }
@@ -54,8 +54,12 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
 
                 val lm = CactusLM()
 
-                // Download and initialize the model (throws exception on failure)
+                // Download the model (no-op if already cached)
+                onProgress?.invoke("⏳ Downloading AI model… (first launch only)")
                 lm.downloadModel(MODEL_SLUG)
+
+                // Load the model into memory
+                onProgress?.invoke("⚙️ Loading AI model into memory…")
                 lm.initializeModel(
                     CactusInitParams(
                         model = MODEL_SLUG,
@@ -65,10 +69,12 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
 
                 cactusLM = lm
                 isInitialized = true
+                onProgress?.invoke("✅ AI model ready")
                 true
             } catch (e: Exception) {
                 e.printStackTrace()
                 isInitialized = false
+                onProgress?.invoke("❌ Failed to load model: ${e.message}")
                 false
             }
         }
