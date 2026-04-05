@@ -28,7 +28,7 @@ class MLCLLMEngine(private val context: Context) : LLMEngine {
         const val TEMPERATURE = 0.7f
     }
 
-    override suspend fun initialize(): Boolean {
+    override suspend fun initialize(onProgress: ((String) -> Unit)?): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 // TODO: Initialize MLC LLM runtime when SDK is added

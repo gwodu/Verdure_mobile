@@ -42,7 +42,7 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
         }
     }
 
-    override suspend fun initialize(onProgress: ((String) -> Unit)? = null): Boolean {
+    override suspend fun initialize(onProgress: ((String) -> Unit)?): Boolean {
         if (isInitialized && cactusLM?.isLoaded() == true) {
             return true
         }
