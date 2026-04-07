@@ -30,7 +30,14 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
     companion object {
         private const val TAG = "CactusLLMEngine"
         // Cactus Kotlin SDK pattern: downloadModel(slug) -> initializeModel(CactusInitParams(model = slug)).
-        private val MODEL_CANDIDATES = listOf("google/gemma-4-E2B-it")
+        // Keep Gemma 4 variants so we can resolve to the exact slug exposed by Cactus model discovery.
+        private val MODEL_CANDIDATES = listOf(
+            "google/gemma-4-E2B-it",
+            "google/gemma-4-e2b-it",
+            "gemma-4-E2B-it",
+            "gemma-4-e2b-it",
+            "gemma4-e2b-it"
+        )
         private const val CONTEXT_SIZE = 4096
         private const val MAX_TOKENS = 2048
         private const val TEMPERATURE = 0.7
@@ -62,8 +69,24 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
                     CactusContextInitializer.initialize(context)
                     val lm = CactusLM()
                     val attemptErrors = mutableListOf<String>()
+                    var availableSlugs: List<String> = emptyList()
 
-                    for (slug in MODEL_CANDIDATES) {
+                    try {
+                        availableSlugs = lm.getModels().map { it.slug }
+                        val gemmaSlugs = availableSlugs.filter { it.contains("gemma", ignoreCase = true) }
+                        if (gemmaSlugs.isNotEmpty()) {
+                            Log.i(TAG, "Model self-check: available Gemma slugs=${gemmaSlugs.joinToString(", ")}")
+                        } else {
+                            Log.w(TAG, "Model self-check: no Gemma slugs discovered from Cactus model registry")
+                        }
+                    } catch (discoveryError: Exception) {
+                        Log.w(TAG, "Model discovery failed; using static slug candidates", discoveryError)
+                    }
+
+                    val downloadCandidates = resolveModelCandidates(MODEL_CANDIDATES, availableSlugs)
+                    Log.i(TAG, "Model self-check: resolved download candidates=${downloadCandidates.joinToString(", ")}")
+
+                    for (slug in downloadCandidates) {
                         try {
                             onProgress?.invoke("⏳ Downloading AI model ($slug)…")
                             lm.downloadModel(slug)
@@ -92,7 +115,12 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
                     isInitialized = false
                     cactusLM = null
                     loadedModelSlug = null
-                    lastInitError = attemptErrors.joinToString(" | ")
+                    val gemmaHint = availableSlugs
+                        .filter { it.contains("gemma", ignoreCase = true) }
+                        .take(6)
+                        .joinToString(", ")
+                        .ifBlank { "none discovered from registry" }
+                    lastInitError = (attemptErrors + "Available Gemma slugs: $gemmaHint").joinToString(" | ")
                     onProgress?.invoke("❌ Failed to load model: $lastInitError")
                     false
                 } catch (e: Exception) {
@@ -150,6 +178,48 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
     override fun isReady(): Boolean = isInitialized && cactusLM?.isLoaded() == true
 
     fun getLastInitError(): String? = lastInitError
+
+    private fun resolveModelCandidates(
+        configuredCandidates: List<String>,
+        discoveredSlugs: List<String>
+    ): List<String> {
+        if (discoveredSlugs.isEmpty()) return configuredCandidates
+
+        val normalizedDiscovered = discoveredSlugs.associateBy { normalizeSlug(it) }
+        val resolved = mutableListOf<String>()
+
+        configuredCandidates.forEach { configured ->
+            val normalizedConfigured = normalizeSlug(configured)
+            val shortConfigured = normalizeSlug(configured.substringAfterLast("/"))
+
+            // 1) Exact (case-insensitive) match
+            normalizedDiscovered[normalizedConfigured]?.let {
+                resolved.add(it)
+                return@forEach
+            }
+
+            // 2) Match by short slug (with or without repo prefix)
+            discoveredSlugs.firstOrNull { candidate ->
+                val n = normalizeSlug(candidate)
+                n == shortConfigured || n.endsWith("/$shortConfigured")
+            }?.let {
+                resolved.add(it)
+                return@forEach
+            }
+        }
+
+        // 3) If still empty, pick first discovered Gemma-4 E2B variant.
+        if (resolved.isEmpty()) {
+            discoveredSlugs.firstOrNull { candidate ->
+                val n = normalizeSlug(candidate)
+                n.contains("gemma") && n.contains("4") && n.contains("e2b")
+            }?.let { resolved.add(it) }
+        }
+
+        return (resolved + configuredCandidates).distinct()
+    }
+
+    private fun normalizeSlug(value: String): String = value.trim().lowercase()
 
     fun unload() {
         cactusLM?.unload()
