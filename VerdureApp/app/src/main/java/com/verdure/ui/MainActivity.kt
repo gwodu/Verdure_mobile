@@ -164,8 +164,12 @@ class MainActivity : AppCompatActivity() {
                     sendButton.isEnabled = true
                     chatInput.isEnabled = true
                 } else {
-                    // Leave the error message from the callback visible
-                    statusBubble.text = "❌ Failed to load AI model. Check your internet connection and restart the app."
+                    val details = llmEngine.getLastInitError()
+                    statusBubble.text = if (details.isNullOrBlank()) {
+                        "❌ Failed to load AI model. Check internet, free storage, then restart the app."
+                    } else {
+                        "❌ Failed to load AI model.\n$details"
+                    }
                     sendButton.isEnabled = false
                     chatInput.isEnabled = false
                 }

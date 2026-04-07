@@ -14,7 +14,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * Cactus LLM backend for running Gemma 4 E2B on-device.
+ * Cactus LLM backend for running a lightweight on-device model.
  *
  * Uses Cactus SDK for local model download and inference.
  */
@@ -22,11 +22,15 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
 
     private var cactusLM: CactusLM? = null
     private var isInitialized = false
+    private var loadedModelSlug: String? = null
+    @Volatile private var lastInitError: String? = null
+    private val initMutex = Mutex()
     private val inferenceMutex = Mutex()
 
     companion object {
         private const val TAG = "CactusLLMEngine"
-        private const val MODEL_SLUG = "google/gemma-4-E2B-it"
+        // Use a lightweight, non-gated slug so first-run downloads are reliable on device.
+        private val MODEL_CANDIDATES = listOf("qwen3-0.6")
         private const val CONTEXT_SIZE = 4096
         private const val MAX_TOKENS = 2048
         private const val TEMPERATURE = 0.7
@@ -43,39 +47,58 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
     }
 
     override suspend fun initialize(onProgress: ((String) -> Unit)?): Boolean {
-        if (isInitialized && cactusLM?.isLoaded() == true) {
-            return true
-        }
+        if (isInitialized && cactusLM?.isLoaded() == true) return true
 
-        return withContext(Dispatchers.IO) {
-            try {
-                // Ensure Cactus context is initialized
-                CactusContextInitializer.initialize(context)
+        return initMutex.withLock {
+            if (isInitialized && cactusLM?.isLoaded() == true) return@withLock true
 
-                val lm = CactusLM()
+            withContext(Dispatchers.IO) {
+                try {
+                    CactusContextInitializer.initialize(context)
+                    val lm = CactusLM()
+                    val attemptErrors = mutableListOf<String>()
 
-                // Download the model (no-op if already cached)
-                onProgress?.invoke("⏳ Downloading AI model… (first launch only)")
-                lm.downloadModel(MODEL_SLUG)
+                    for (slug in MODEL_CANDIDATES) {
+                        try {
+                            onProgress?.invoke("⏳ Downloading AI model ($slug)…")
+                            lm.downloadModel(slug)
 
-                // Load the model into memory
-                onProgress?.invoke("⚙️ Loading AI model into memory…")
-                lm.initializeModel(
-                    CactusInitParams(
-                        model = MODEL_SLUG,
-                        contextSize = CONTEXT_SIZE
-                    )
-                )
+                            onProgress?.invoke("⚙️ Loading AI model into memory ($slug)…")
+                            lm.initializeModel(
+                                CactusInitParams(
+                                    model = slug,
+                                    contextSize = CONTEXT_SIZE
+                                )
+                            )
 
-                cactusLM = lm
-                isInitialized = true
-                onProgress?.invoke("✅ AI model ready")
-                true
-            } catch (e: Exception) {
-                e.printStackTrace()
-                isInitialized = false
-                onProgress?.invoke("❌ Failed to load model: ${e.message}")
-                false
+                            cactusLM = lm
+                            isInitialized = true
+                            loadedModelSlug = slug
+                            lastInitError = null
+                            onProgress?.invoke("✅ AI model ready ($slug)")
+                            return@withContext true
+                        } catch (e: Exception) {
+                            val errorLine = "$slug failed: ${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
+                            attemptErrors.add(errorLine)
+                            Log.e(TAG, "Model initialization attempt failed for slug=$slug", e)
+                        }
+                    }
+
+                    isInitialized = false
+                    cactusLM = null
+                    loadedModelSlug = null
+                    lastInitError = attemptErrors.joinToString(" | ")
+                    onProgress?.invoke("❌ Failed to load model: $lastInitError")
+                    false
+                } catch (e: Exception) {
+                    Log.e(TAG, "Cactus initialization failed before model load", e)
+                    isInitialized = false
+                    cactusLM = null
+                    loadedModelSlug = null
+                    lastInitError = "${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
+                    onProgress?.invoke("❌ Failed to load model: $lastInitError")
+                    false
+                }
             }
         }
     }
@@ -89,7 +112,10 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
         return inferenceMutex.withLock {
             withContext(Dispatchers.IO) {
                 try {
-                    Log.d(TAG, "Starting native inference (prompt length: ${prompt.length} chars)")
+                    Log.d(
+                        TAG,
+                        "Starting native inference (model=${loadedModelSlug ?: "unknown"}, prompt length=${prompt.length} chars)"
+                    )
                     val result = lm.generateCompletion(
                         messages = listOf(
                             ChatMessage(content = prompt, role = "user")
@@ -118,9 +144,13 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
 
     override fun isReady(): Boolean = isInitialized && cactusLM?.isLoaded() == true
 
+    fun getLastInitError(): String? = lastInitError
+
     fun unload() {
         cactusLM?.unload()
         cactusLM = null
         isInitialized = false
+        loadedModelSlug = null
+        lastInitError = null
     }
 }
