@@ -14,7 +14,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * Cactus LLM backend for running Gemma 4 E2B on-device.
+ * Cactus LLM backend for running Gemma on-device.
  *
  * Uses Cactus SDK for local model download and inference.
  */
@@ -30,13 +30,11 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
     companion object {
         private const val TAG = "CactusLLMEngine"
         // Cactus Kotlin SDK pattern: downloadModel(slug) -> initializeModel(CactusInitParams(model = slug)).
-        // Keep Gemma 4 variants so we can resolve to the exact slug exposed by Cactus model discovery.
+        // Prefer Gemma 3 1B because it is confirmed in the on-device Cactus model registry.
         private val MODEL_CANDIDATES = listOf(
-            "google/gemma-4-E2B-it",
-            "google/gemma-4-e2b-it",
-            "gemma-4-E2B-it",
-            "gemma-4-e2b-it",
-            "gemma4-e2b-it"
+            "gemma3-1b",
+            "gemma3-1b-pro",
+            "gemma3-270m"
         )
         private const val CONTEXT_SIZE = 4096
         private const val MAX_TOKENS = 2048
@@ -208,11 +206,11 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
             }
         }
 
-        // 3) If still empty, pick first discovered Gemma-4 E2B variant.
+                    // 3) If still empty, pick first discovered Gemma variant.
         if (resolved.isEmpty()) {
             discoveredSlugs.firstOrNull { candidate ->
                 val n = normalizeSlug(candidate)
-                n.contains("gemma") && n.contains("4") && n.contains("e2b")
+                            n.contains("gemma")
             }?.let { resolved.add(it) }
         }
 
