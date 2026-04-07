@@ -74,6 +74,15 @@
             android:textSize="13sp"
             android:textColor="@color/text_secondary"/>
 
+        <TextView
+            android:id="@+id/modelSlugText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="Model: loading..."
+            android:textSize="12sp"
+            android:textColor="@color/text_tertiary"/>
+
         <!-- Permission Button -->
         <Button
             android:id="@+id/requestPermissionButton"

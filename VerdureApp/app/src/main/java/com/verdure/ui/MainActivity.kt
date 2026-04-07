@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import android.view.Gravity
 import android.widget.Button
 import android.widget.EditText
@@ -32,6 +33,7 @@ import kotlinx.coroutines.launch
 class MainActivity : AppCompatActivity() {
 
     private lateinit var statusText: TextView
+    private lateinit var modelSlugText: TextView
     private lateinit var requestPermissionButton: Button
     private lateinit var settingsButton: android.widget.ImageView
     private lateinit var incentivesButton: TextView
@@ -47,6 +49,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var verdureAI: VerdureAI
 
     companion object {
+        private const val TAG = "MainActivity"
         private const val CALENDAR_PERMISSION_REQUEST = 100
     }
 
@@ -56,9 +59,12 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         statusText = findViewById(R.id.statusText)
+        modelSlugText = findViewById(R.id.modelSlugText)
         requestPermissionButton = findViewById(R.id.requestPermissionButton)
         settingsButton = findViewById(R.id.settingsButton)
         incentivesButton = findViewById(R.id.incentivesButton)
+        modelSlugText.text = "Model: ${CactusLLMEngine.getConfiguredModelSlug()}"
+        Log.i(TAG, "LLM self-check configured model slug=${CactusLLMEngine.getConfiguredModelSlug()}")
 
         // Chat components
         chatInput = findViewById(R.id.chatInput)
@@ -146,6 +152,7 @@ class MainActivity : AppCompatActivity() {
 
             runOnUiThread {
                 if (initialized) {
+                    modelSlugText.text = "Model: ${llmEngine.getActiveModelSlug() ?: CactusLLMEngine.getConfiguredModelSlug()} (active)"
                     // Initialize user context manager
                     val contextManager = UserContextManager.getInstance(applicationContext)
 
@@ -164,6 +171,7 @@ class MainActivity : AppCompatActivity() {
                     sendButton.isEnabled = true
                     chatInput.isEnabled = true
                 } else {
+                    modelSlugText.text = "Model: ${CactusLLMEngine.getConfiguredModelSlug()} (failed)"
                     val details = llmEngine.getLastInitError()
                     statusBubble.text = if (details.isNullOrBlank()) {
                         "❌ Failed to load AI model. Check internet, free storage, then restart the app."

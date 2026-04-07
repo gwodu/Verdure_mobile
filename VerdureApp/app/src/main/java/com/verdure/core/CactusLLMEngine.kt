@@ -44,7 +44,11 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
                 instance ?: CactusLLMEngine(context.applicationContext).also { instance = it }
             }
         }
+
+        fun getConfiguredModelSlug(): String = MODEL_CANDIDATES.first()
     }
+
+    fun getActiveModelSlug(): String? = loadedModelSlug
 
     override suspend fun initialize(onProgress: ((String) -> Unit)?): Boolean {
         if (isInitialized && cactusLM?.isLoaded() == true) return true
@@ -54,6 +58,7 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
 
             withContext(Dispatchers.IO) {
                 try {
+                    Log.i(TAG, "Model self-check: configured slug=${getConfiguredModelSlug()}")
                     CactusContextInitializer.initialize(context)
                     val lm = CactusLM()
                     val attemptErrors = mutableListOf<String>()
