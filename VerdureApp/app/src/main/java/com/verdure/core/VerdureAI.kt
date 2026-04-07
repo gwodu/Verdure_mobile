@@ -42,6 +42,7 @@ class VerdureAI(
 
     // Registry of all available tools
     private val tools = mutableMapOf<String, Tool>()
+    private var recentConversationTurns: List<String> = emptyList()
 
     // JSON parser for structured output
     private val json = Json { ignoreUnknownKeys = true }
@@ -52,6 +53,14 @@ class VerdureAI(
     fun registerTool(tool: Tool) {
         tools[tool.name] = tool
         Log.d(TAG, "Registered tool: ${tool.name} - ${tool.description}")
+    }
+
+    /**
+     * Update recent chat turns so the LLM keeps short-term conversational context
+     * across app restarts and multi-message flows.
+     */
+    fun setRecentConversationTurns(turns: List<String>) {
+        recentConversationTurns = turns.takeLast(8)
     }
 
     /**
@@ -219,11 +228,17 @@ Now classify the user's message:
         notificationList: String,
         context: com.verdure.data.UserContext
     ): String {
+        val recentTurnsSection = if (recentConversationTurns.isNotEmpty()) {
+            "Recent conversation:\n${recentConversationTurns.joinToString("\n")}\n"
+        } else {
+            ""
+        }
         return """
 You are V, the user's personal AI assistant.
 
 User's priorities: ${context.priorityRules.keywords.joinToString(", ").ifEmpty { "None set yet" }}
 High priority apps: ${context.priorityRules.highPriorityApps.joinToString(", ").ifEmpty { "None set yet" }}
+${recentTurnsSection}
 
 Recent urgent notifications (sorted by importance):
 $notificationList
@@ -275,11 +290,17 @@ IMPORTANT: Structure your response as follows:
         userMessage: String,
         context: com.verdure.data.UserContext
     ): String {
+        val recentTurnsSection = if (recentConversationTurns.isNotEmpty()) {
+            "Recent conversation:\n${recentConversationTurns.joinToString("\n")}\n"
+        } else {
+            ""
+        }
         return """
 You are V, a personal AI assistant.
 
 Current user priorities:
 ${context.toJson()}
+${recentTurnsSection}
 
 User message: "$userMessage"
 
@@ -419,8 +440,14 @@ Now extract from the user's message:
      * Build prompt for app prioritization extraction
      */
     private fun buildAppPrioritizationPrompt(userMessage: String): String {
+        val recentTurnsSection = if (recentConversationTurns.isNotEmpty()) {
+            "Recent conversation:\n${recentConversationTurns.joinToString("\n")}\n"
+        } else {
+            ""
+        }
         return """
 You are V, a personal AI assistant.
+${recentTurnsSection}
 
 User message: "$userMessage"
 
@@ -494,6 +521,11 @@ Now extract from the user's message:
         userMessage: String,
         context: com.verdure.data.UserContext
     ): String {
+        val recentTurnsSection = if (recentConversationTurns.isNotEmpty()) {
+            "Recent conversation:\n${recentConversationTurns.joinToString("\n")}\n"
+        } else {
+            ""
+        }
         return """
 You are V, a personal AI assistant for notification management.
 
@@ -506,6 +538,7 @@ Current user priorities:
 - Apps: ${context.priorityRules.highPriorityApps.joinToString(", ").ifEmpty { "None set yet" }}
 - Keywords: ${context.priorityRules.keywords.joinToString(", ").ifEmpty { "None set yet" }}
 - Important contacts: ${context.priorityRules.contacts.joinToString(", ").ifEmpty { "None set yet" }}
+${recentTurnsSection}
 
 User: "$userMessage"
 

@@ -25,6 +25,7 @@ import com.verdure.data.InstalledAppsManager
 import com.verdure.data.LLMResponse
 import com.verdure.data.NotificationRepository
 import com.verdure.data.UserContextManager
+import com.verdure.data.ChatHistoryStore
 import com.verdure.services.VerdureNotificationListener
 import com.verdure.tools.AppPrioritizationTool
 import com.verdure.tools.NotificationTool
@@ -43,6 +44,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sendButton: Button
     private lateinit var chatHistoryContainer: LinearLayout
     private lateinit var chatScrollView: ScrollView
+    private lateinit var chatHistoryStore: ChatHistoryStore
 
     // AI components
     private lateinit var llmEngine: CactusLLMEngine
@@ -71,10 +73,14 @@ class MainActivity : AppCompatActivity() {
         sendButton = findViewById(R.id.sendButton)
         chatHistoryContainer = findViewById(R.id.chatHistoryContainer)
         chatScrollView = findViewById(R.id.chatScrollView)
+        chatHistoryStore = ChatHistoryStore(applicationContext)
 
         // Prevent sends until async AI initialization completes.
         sendButton.isEnabled = false
         chatInput.isEnabled = false
+
+        // Restore persisted chat bubbles across app restarts.
+        restoreChatHistory()
 
         // Clean up old notifications on app startup (24h TTL)
         cleanupOldNotifications()
@@ -161,6 +167,7 @@ class MainActivity : AppCompatActivity() {
 
                     // Create VerdureAI orchestrator with context
                     verdureAI = VerdureAI(llmEngine, contextManager)
+                    verdureAI.setRecentConversationTurns(chatHistoryStore.getRecentForPrompt())
 
                     // Register tools (NotificationTool needs context for Room access)
                     verdureAI.registerTool(NotificationTool(applicationContext, llmEngine, contextManager))
@@ -202,6 +209,12 @@ class MainActivity : AppCompatActivity() {
 
         // Show user message
         addMessageToChat("You", userMessage, null)
+        lifecycleScope.launch {
+            chatHistoryStore.appendUserMessage(userMessage)
+            if (::verdureAI.isInitialized) {
+                verdureAI.setRecentConversationTurns(chatHistoryStore.getRecentForPrompt())
+            }
+        }
 
         // Disable input while processing
         sendButton.isEnabled = false
@@ -222,6 +235,12 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     chatHistoryContainer.removeView(thinkingView)
                     addMessageToChat("V", parsedResponse.response, parsedResponse.thinking)
+                    lifecycleScope.launch {
+                        chatHistoryStore.appendAssistantMessage(parsedResponse.response)
+                        if (::verdureAI.isInitialized) {
+                            verdureAI.setRecentConversationTurns(chatHistoryStore.getRecentForPrompt())
+                        }
+                    }
                     scrollToBottom()
 
                     // Re-enable input
@@ -384,6 +403,24 @@ class MainActivity : AppCompatActivity() {
     private fun scrollToBottom() {
         chatScrollView.post {
             chatScrollView.fullScroll(ScrollView.FOCUS_DOWN)
+        }
+    }
+
+    /**
+     * Rehydrate chat UI from persisted history.
+     */
+    private fun restoreChatHistory() {
+        val turns = chatHistoryStore.getAllForDisplay()
+        if (turns.isEmpty()) return
+
+        chatHistoryContainer.removeAllViews()
+        turns.forEach { turn ->
+            val sender = when (turn.role) {
+                "user" -> "You"
+                "assistant" -> "V"
+                else -> "System"
+            }
+            addMessageToChat(sender, turn.content, null)
         }
     }
 
