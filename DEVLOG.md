@@ -1576,3 +1576,15 @@ data class StoredNotification(
 **Solution:** Upgrade Room to 2.8.4 (supports Kotlin 2.2.0 metadata with KAPT)
 
 **Tradeoff:** KAPT slower than KSP (~20% longer build), but stable and working (acceptable)
+
+---
+
+## Session 16 - April 7, 2026
+
+**Decision:** Serialize Cactus model initialization with a mutex and expose exact init failure details to UI.
+**Why:** Multiple app components (`MainActivity`, widget/background service, incentives screen) can initialize the engine at startup; concurrent download/load attempts caused flaky first-run failures that surfaced as a generic "check internet" message.
+**Tradeoff:** Slightly more initialization coordination complexity vs deterministic startup behavior and debuggable errors (worth it).
+
+**Decision:** Use lightweight Cactus model slug `qwen3-0.6` for first-run downloads.
+**Why:** Current configured slug (`google/gemma-4-E2B-it`) is heavier and can fail due to access/compatibility constraints; SDK docs and examples consistently use lightweight slugs like `qwen3-0.6` for reliable on-device bootstrap.
+**Tradeoff:** Smaller model quality ceiling vs materially better download reliability and faster time-to-first-response.

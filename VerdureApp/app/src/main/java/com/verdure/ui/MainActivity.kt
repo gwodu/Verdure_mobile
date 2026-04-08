@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import android.view.Gravity
 import android.widget.Button
 import android.widget.EditText
@@ -24,6 +25,7 @@ import com.verdure.data.InstalledAppsManager
 import com.verdure.data.LLMResponse
 import com.verdure.data.NotificationRepository
 import com.verdure.data.UserContextManager
+import com.verdure.data.ChatHistoryStore
 import com.verdure.services.VerdureNotificationListener
 import com.verdure.tools.AppPrioritizationTool
 import com.verdure.tools.NotificationTool
@@ -32,6 +34,7 @@ import kotlinx.coroutines.launch
 class MainActivity : AppCompatActivity() {
 
     private lateinit var statusText: TextView
+    private lateinit var modelSlugText: TextView
     private lateinit var requestPermissionButton: Button
     private lateinit var settingsButton: android.widget.ImageView
     private lateinit var incentivesButton: TextView
@@ -41,12 +44,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sendButton: Button
     private lateinit var chatHistoryContainer: LinearLayout
     private lateinit var chatScrollView: ScrollView
+    private lateinit var chatHistoryStore: ChatHistoryStore
 
     // AI components
     private lateinit var llmEngine: CactusLLMEngine
     private lateinit var verdureAI: VerdureAI
 
     companion object {
+        private const val TAG = "MainActivity"
         private const val CALENDAR_PERMISSION_REQUEST = 100
     }
 
@@ -56,19 +61,26 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         statusText = findViewById(R.id.statusText)
+        modelSlugText = findViewById(R.id.modelSlugText)
         requestPermissionButton = findViewById(R.id.requestPermissionButton)
         settingsButton = findViewById(R.id.settingsButton)
         incentivesButton = findViewById(R.id.incentivesButton)
+        modelSlugText.text = "Model: ${CactusLLMEngine.getConfiguredModelSlug()}"
+        Log.i(TAG, "LLM self-check configured model slug=${CactusLLMEngine.getConfiguredModelSlug()}")
 
         // Chat components
         chatInput = findViewById(R.id.chatInput)
         sendButton = findViewById(R.id.sendButton)
         chatHistoryContainer = findViewById(R.id.chatHistoryContainer)
         chatScrollView = findViewById(R.id.chatScrollView)
+        chatHistoryStore = ChatHistoryStore(applicationContext)
 
         // Prevent sends until async AI initialization completes.
         sendButton.isEnabled = false
         chatInput.isEnabled = false
+
+        // Restore persisted chat bubbles across app restarts.
+        restoreChatHistory()
 
         // Clean up old notifications on app startup (24h TTL)
         cleanupOldNotifications()
@@ -146,6 +158,7 @@ class MainActivity : AppCompatActivity() {
 
             runOnUiThread {
                 if (initialized) {
+                    modelSlugText.text = "Model: ${llmEngine.getActiveModelSlug() ?: CactusLLMEngine.getConfiguredModelSlug()} (active)"
                     // Initialize user context manager
                     val contextManager = UserContextManager.getInstance(applicationContext)
 
@@ -154,6 +167,7 @@ class MainActivity : AppCompatActivity() {
 
                     // Create VerdureAI orchestrator with context
                     verdureAI = VerdureAI(llmEngine, contextManager)
+                    verdureAI.setRecentConversationTurns(chatHistoryStore.getRecentForPrompt())
 
                     // Register tools (NotificationTool needs context for Room access)
                     verdureAI.registerTool(NotificationTool(applicationContext, llmEngine, contextManager))
@@ -164,8 +178,13 @@ class MainActivity : AppCompatActivity() {
                     sendButton.isEnabled = true
                     chatInput.isEnabled = true
                 } else {
-                    // Leave the error message from the callback visible
-                    statusBubble.text = "❌ Failed to load AI model. Check your internet connection and restart the app."
+                    modelSlugText.text = "Model: ${CactusLLMEngine.getConfiguredModelSlug()} (failed)"
+                    val details = llmEngine.getLastInitError()
+                    statusBubble.text = if (details.isNullOrBlank()) {
+                        "❌ Failed to load AI model. Check internet, free storage, then restart the app."
+                    } else {
+                        "❌ Failed to load AI model.\n$details"
+                    }
                     sendButton.isEnabled = false
                     chatInput.isEnabled = false
                 }
@@ -190,6 +209,12 @@ class MainActivity : AppCompatActivity() {
 
         // Show user message
         addMessageToChat("You", userMessage, null)
+        lifecycleScope.launch {
+            chatHistoryStore.appendUserMessage(userMessage)
+            if (::verdureAI.isInitialized) {
+                verdureAI.setRecentConversationTurns(chatHistoryStore.getRecentForPrompt())
+            }
+        }
 
         // Disable input while processing
         sendButton.isEnabled = false
@@ -210,6 +235,12 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     chatHistoryContainer.removeView(thinkingView)
                     addMessageToChat("V", parsedResponse.response, parsedResponse.thinking)
+                    lifecycleScope.launch {
+                        chatHistoryStore.appendAssistantMessage(parsedResponse.response)
+                        if (::verdureAI.isInitialized) {
+                            verdureAI.setRecentConversationTurns(chatHistoryStore.getRecentForPrompt())
+                        }
+                    }
                     scrollToBottom()
 
                     // Re-enable input
@@ -372,6 +403,24 @@ class MainActivity : AppCompatActivity() {
     private fun scrollToBottom() {
         chatScrollView.post {
             chatScrollView.fullScroll(ScrollView.FOCUS_DOWN)
+        }
+    }
+
+    /**
+     * Rehydrate chat UI from persisted history.
+     */
+    private fun restoreChatHistory() {
+        val turns = chatHistoryStore.getAllForDisplay()
+        if (turns.isEmpty()) return
+
+        chatHistoryContainer.removeAllViews()
+        turns.forEach { turn ->
+            val sender = when (turn.role) {
+                "user" -> "You"
+                "assistant" -> "V"
+                else -> "System"
+            }
+            addMessageToChat(sender, turn.content, null)
         }
     }
 
