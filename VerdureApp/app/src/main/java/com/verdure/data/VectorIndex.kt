@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.room.RoomDatabase
 import androidx.room.useReaderConnection
 import androidx.room.useWriterConnection
+import androidx.room.execSQL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -26,7 +27,7 @@ class VectorIndex(private val context: android.content.Context) {
 
     suspend fun ensureReady() {
         withContext(Dispatchers.IO) {
-            database.useWriterConnection { connection ->
+            database.useWriterConnection { connection: androidx.room.Transactor ->
                 connection.execSQL(
                     """
                     CREATE VIRTUAL TABLE IF NOT EXISTS $VEC_TABLE USING vec0(
@@ -46,10 +47,10 @@ class VectorIndex(private val context: android.content.Context) {
         }
 
         withContext(Dispatchers.IO) {
-            database.useWriterConnection { connection ->
+            database.useWriterConnection { connection: androidx.room.Transactor ->
                 val sql =
                     "INSERT OR REPLACE INTO $VEC_TABLE (embedding_id, embedding) VALUES (?, ?)"
-                connection.prepare(sql).use { statement ->
+                connection.usePrepared(sql) { statement: androidx.sqlite.SQLiteStatement ->
                     statement.bindLong(1, id)
                     statement.bindBlob(2, vector.toSqliteVecBlob())
                     statement.step()
@@ -60,7 +61,7 @@ class VectorIndex(private val context: android.content.Context) {
 
     suspend fun delete(id: Long) {
         withContext(Dispatchers.IO) {
-            database.useWriterConnection { connection ->
+            database.useWriterConnection { connection: androidx.room.Transactor ->
                 connection.execSQL("DELETE FROM $VEC_TABLE WHERE embedding_id = $id")
             }
         }
@@ -69,7 +70,7 @@ class VectorIndex(private val context: android.content.Context) {
     suspend fun deleteMany(ids: List<Long>) {
         if (ids.isEmpty()) return
         withContext(Dispatchers.IO) {
-            database.useWriterConnection { connection ->
+            database.useWriterConnection { connection: androidx.room.Transactor ->
                 ids.forEach { id ->
                     connection.execSQL("DELETE FROM $VEC_TABLE WHERE embedding_id = $id")
                 }
@@ -85,7 +86,7 @@ class VectorIndex(private val context: android.content.Context) {
 
         return withContext(Dispatchers.IO) {
             val results = mutableListOf<Pair<Long, Float>>()
-            database.useReaderConnection { connection ->
+            database.useReaderConnection { connection: androidx.room.Transactor ->
                 val sql =
                     """
                     SELECT embedding_id, distance
@@ -94,9 +95,9 @@ class VectorIndex(private val context: android.content.Context) {
                     AND k = ?
                     ORDER BY distance ASC
                     """.trimIndent()
-                connection.prepare(sql).use { statement ->
+                connection.usePrepared(sql) { statement: androidx.sqlite.SQLiteStatement ->
                     statement.bindBlob(1, queryVector.toSqliteVecBlob())
-                    statement.bindInt(2, k)
+                    statement.bindLong(2, k.toLong())
                     while (statement.step()) {
                         val embeddingId = statement.getLong(0)
                         val distance = statement.getDouble(1).toFloat()

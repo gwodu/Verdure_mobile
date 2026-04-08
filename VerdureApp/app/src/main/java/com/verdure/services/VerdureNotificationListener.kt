@@ -156,7 +156,7 @@ class VerdureNotificationListener : NotificationListenerService() {
                     val score = notificationFilter.scoreNotification(notificationData)
                     val stored = notificationRepository.storeNotificationAndGet(notificationData, score)
                     if (stored != null && ::ingestionPipeline.isInitialized) {
-                        ingestionPipeline.enqueue(stored)
+                        ingestionPipeline.enqueue(stored.toNotificationData())
                     } else {
                         Log.w(TAG, "Skipping ingestion; stored row unavailable")
                     }

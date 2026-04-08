@@ -41,8 +41,9 @@ class NotificationRepository(context: Context) {
     ): Long = withContext(Dispatchers.IO) {
         try {
             val stored = StoredNotification.fromNotificationData(notificationData, priorityScore)
-            dao.insertNotification(stored)
+            val id = dao.insertNotification(stored)
             Log.d(TAG, "Stored notification: ${notificationData.appName} (score: $priorityScore)")
+            id
         } catch (e: Exception) {
             Log.e(TAG, "Failed to store notification", e)
             -1L
