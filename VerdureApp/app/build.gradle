@@ -65,5 +65,9 @@ dependencies {
     // Room database for persistent notification storage
     implementation 'androidx.room:room-runtime:2.8.4'
     implementation 'androidx.room:room-ktx:2.8.4'
+    implementation 'androidx.room:room-sqlite-wrapper:2.8.4'
     kapt 'androidx.room:room-compiler:2.8.4'
+
+    // Bundled SQLite driver for extension loading (sqlite-vec)
+    implementation 'androidx.sqlite:sqlite-bundled:2.6.1'
 }

@@ -32,6 +32,7 @@ class VerdureNotificationListener : NotificationListenerService() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
     private lateinit var notificationRepository: NotificationRepository
     private lateinit var notificationFilter: NotificationFilter
+    private lateinit var ingestionPipeline: IngestionPipeline
     
     companion object {
         private const val TAG = "VerdureNotifListener"
@@ -117,6 +118,7 @@ class VerdureNotificationListener : NotificationListenerService() {
             contextManager.loadContext()
         }
         notificationFilter = NotificationFilter(userContext)
+        ingestionPipeline = IngestionPipeline.getInstance(applicationContext)
 
         // Clean up old notifications on startup
         serviceScope.launch {
@@ -152,7 +154,12 @@ class VerdureNotificationListener : NotificationListenerService() {
             if (::notificationRepository.isInitialized && ::notificationFilter.isInitialized) {
                 serviceScope.launch {
                     val score = notificationFilter.scoreNotification(notificationData)
-                    notificationRepository.storeNotification(notificationData, score)
+                    val stored = notificationRepository.storeNotificationAndGet(notificationData, score)
+                    if (stored != null && ::ingestionPipeline.isInitialized) {
+                        ingestionPipeline.enqueue(stored.toNotificationData())
+                    } else {
+                        Log.w(TAG, "Skipping ingestion; stored row unavailable")
+                    }
                 }
             }
         }

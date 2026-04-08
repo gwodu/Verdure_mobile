@@ -7,10 +7,15 @@ Latest features:
 - Home screen widget for critical notifications
 - Auto-dismiss processed notifications
 - Beautiful minimalist chat interface
+- Ambient AI Architecture v2: ingestion pipeline (extract -> embed -> store) and semantic retrieval (RAG loop)
+- sqlite-vec vector index integrated with Room dual-store (structured + semantic)
+- Embedding model loaded as a separate resident Cactus model (qwen3-0.6-embed with fallback)
 
 Setup required:
 1. Grant notification access permission
 2. Grant calendar access permission (optional)
 3. Wait for Qwen model to download on first launch (~600MB)
+4. Prototype migration note: database uses fallbackToDestructiveMigration() in v2 schema updates,
+   so upgrading may clear existing local notifications/embeddings.
 
 For full setup guide, visit: https://github.com/gwodu/Verdure

@@ -19,6 +19,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.verdure.R
 import com.cactus.CactusContextInitializer
+import com.verdure.core.CactusEmbeddingEngine
 import com.verdure.core.CactusLLMEngine
 import com.verdure.core.VerdureAI
 import com.verdure.data.InstalledAppsManager
@@ -26,9 +27,11 @@ import com.verdure.data.LLMResponse
 import com.verdure.data.NotificationRepository
 import com.verdure.data.UserContextManager
 import com.verdure.data.ChatHistoryStore
+import com.verdure.services.IngestionPipeline
 import com.verdure.services.VerdureNotificationListener
 import com.verdure.tools.AppPrioritizationTool
 import com.verdure.tools.NotificationTool
+import com.verdure.tools.SemanticRetrievalTool
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
@@ -48,6 +51,7 @@ class MainActivity : AppCompatActivity() {
 
     // AI components
     private lateinit var llmEngine: CactusLLMEngine
+    private lateinit var embeddingEngine: CactusEmbeddingEngine
     private lateinit var verdureAI: VerdureAI
 
     companion object {
@@ -151,6 +155,7 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             llmEngine = CactusLLMEngine.getInstance(applicationContext)
+            embeddingEngine = CactusEmbeddingEngine.getInstance(applicationContext)
 
             val initialized = llmEngine.initialize { progressMessage ->
                 runOnUiThread { statusBubble.text = progressMessage }
@@ -166,12 +171,36 @@ class MainActivity : AppCompatActivity() {
                     val appsManager = InstalledAppsManager(applicationContext)
 
                     // Create VerdureAI orchestrator with context
-                    verdureAI = VerdureAI(llmEngine, contextManager)
+                    verdureAI = VerdureAI(applicationContext, llmEngine, contextManager)
                     verdureAI.setRecentConversationTurns(chatHistoryStore.getRecentForPrompt())
 
                     // Register tools (NotificationTool needs context for Room access)
                     verdureAI.registerTool(NotificationTool(applicationContext, llmEngine, contextManager))
                     verdureAI.registerTool(AppPrioritizationTool(contextManager, appsManager))
+                    verdureAI.registerTool(SemanticRetrievalTool(applicationContext, contextManager))
+
+                    // Initialize ingestion pipeline (runs independently in background).
+                    IngestionPipeline.getInstance(applicationContext).warmup()
+
+                    // Step 1 throwaway embedding self-check log.
+                    lifecycleScope.launch {
+                        val embeddingReady = embeddingEngine.initialize { message ->
+                            Log.d(TAG, "Embedding init progress: $message")
+                        }
+                        if (embeddingReady) {
+                            try {
+                                val vec = embeddingEngine.embed("Verdure embedding self-check")
+                                Log.d(
+                                    TAG,
+                                    "Embedding self-check success: dim=${vec.size}, model=${embeddingEngine.getActiveModelSlug()}"
+                                )
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Embedding self-check failed after init", e)
+                            }
+                        } else {
+                            Log.e(TAG, "Embedding init failed: ${embeddingEngine.getLastInitError()}")
+                        }
+                    }
 
                     // Remove the status bubble and enable chat
                     chatHistoryContainer.removeView(statusBubble.parent as? android.view.View ?: statusBubble)
