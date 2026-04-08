@@ -13,6 +13,8 @@ class NotificationRepository(context: Context) {
     
     private val database = NotificationDatabase.getInstance(context)
     private val dao = database.notificationDao()
+    private val embeddingDao = database.embeddingDao()
+    private val entityMentionDao = database.entityMentionDao()
     
     companion object {
         private const val TAG = "NotificationRepo"
@@ -36,13 +38,27 @@ class NotificationRepository(context: Context) {
     suspend fun storeNotification(
         notificationData: NotificationData,
         priorityScore: Int
-    ) = withContext(Dispatchers.IO) {
+    ): Long = withContext(Dispatchers.IO) {
         try {
             val stored = StoredNotification.fromNotificationData(notificationData, priorityScore)
             dao.insertNotification(stored)
             Log.d(TAG, "Stored notification: ${notificationData.appName} (score: $priorityScore)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to store notification", e)
+            -1L
+        }
+    }
+
+    suspend fun storeNotificationAndGet(
+        notificationData: NotificationData,
+        priorityScore: Int
+    ): StoredNotification? = withContext(Dispatchers.IO) {
+        try {
+            dao.insertNotification(StoredNotification.fromNotificationData(notificationData, priorityScore))
+            dao.getBySystemKey(notificationData.systemKey)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to store notification and fetch stored row", e)
+            null
         }
     }
     
@@ -155,6 +171,87 @@ class NotificationRepository(context: Context) {
             NotificationStats(0, 0, 0)
         }
     }
+
+    suspend fun storeEmbeddingRow(
+        sourceNotificationId: Int,
+        summaryText: String,
+        modelVersion: String
+    ): Long = withContext(Dispatchers.IO) {
+        try {
+            embeddingDao.insert(
+                EmbeddingEntity(
+                    sourceNotificationId = sourceNotificationId,
+                    summaryText = summaryText,
+                    createdAt = System.currentTimeMillis(),
+                    modelVersion = modelVersion
+                )
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to store embedding row", e)
+            -1L
+        }
+    }
+
+    suspend fun storeEntityMentions(notificationId: Int, mentions: List<EntityMentionEntity>) =
+        withContext(Dispatchers.IO) {
+            try {
+                if (mentions.isNotEmpty()) {
+                    entityMentionDao.insertAll(mentions.map { it.copy(notificationId = notificationId) })
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to store entity mentions", e)
+            }
+        }
+
+    suspend fun getEmbeddingBySourceId(sourceNotificationId: Int): EmbeddingEntity? =
+        withContext(Dispatchers.IO) {
+            try {
+                embeddingDao.getBySourceId(sourceNotificationId)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to read embedding by source id=$sourceNotificationId", e)
+                null
+            }
+        }
+
+    suspend fun getEmbeddingsByIds(ids: List<Long>): List<EmbeddingEntity> = withContext(Dispatchers.IO) {
+        if (ids.isEmpty()) return@withContext emptyList()
+        try {
+            embeddingDao.getByIds(ids)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch embeddings by ids", e)
+            emptyList()
+        }
+    }
+
+    suspend fun getNotificationsByIds(ids: List<Int>): List<StoredNotification> = withContext(Dispatchers.IO) {
+        if (ids.isEmpty()) return@withContext emptyList()
+        try {
+            dao.getByIds(ids)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch notifications by ids", e)
+            emptyList()
+        }
+    }
+
+    suspend fun findBySystemKey(systemKey: String): StoredNotification? = withContext(Dispatchers.IO) {
+        try {
+            dao.getBySystemKey(systemKey)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch notification by system key", e)
+            null
+        }
+    }
+
+    suspend fun cleanupOldEmbeddings(cutoffTime: Long): Int = withContext(Dispatchers.IO) {
+        try {
+            embeddingDao.deleteOlderThan(cutoffTime)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to cleanup old embeddings", e)
+            0
+        }
+    }
+
+    fun getDatabase(): NotificationDatabase = database
     
     data class NotificationStats(
         val total: Int,

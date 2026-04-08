@@ -84,6 +84,9 @@ interface NotificationDao {
      */
     @Query("SELECT * FROM notifications WHERE systemKey = :systemKey LIMIT 1")
     suspend fun getBySystemKey(systemKey: String): StoredNotification?
+
+    @Query("SELECT * FROM notifications WHERE id IN (:ids)")
+    suspend fun getByIds(ids: List<Int>): List<StoredNotification>
     
     /**
      * Mark notification as dismissed.

@@ -95,3 +95,22 @@ data class StoredNotification(
         }
     }
 }
+
+fun StoredNotification.toNotificationDataForScoring(): NotificationData {
+    return NotificationData(
+        id = id,
+        systemKey = systemKey,
+        packageName = packageName,
+        appName = appName,
+        title = title,
+        text = text,
+        timestamp = timestamp,
+        isClearable = isClearable,
+        category = category,
+        priority = priority,
+        contentIntent = null,
+        hasActions = hasActions,
+        hasImage = hasImage,
+        isOngoing = isOngoing
+    )
+}

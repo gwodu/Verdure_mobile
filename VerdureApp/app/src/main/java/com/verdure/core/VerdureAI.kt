@@ -1,8 +1,9 @@
 package com.verdure.core
 
+import android.content.Context
 import android.util.Log
+import com.verdure.core.HybridRouter.Route
 import com.verdure.data.UserContextManager
-import com.verdure.data.NotificationData
 import com.verdure.data.PriorityChanges
 import com.verdure.tools.Tool
 import kotlinx.serialization.Serializable
@@ -32,6 +33,7 @@ import kotlinx.serialization.json.jsonPrimitive
  * - Easier to debug and improve
  */
 class VerdureAI(
+    private val context: Context,
     private val llmEngine: LLMEngine,
     private val contextManager: UserContextManager
 ) {
@@ -43,6 +45,7 @@ class VerdureAI(
     // Registry of all available tools
     private val tools = mutableMapOf<String, Tool>()
     private var recentConversationTurns: List<String> = emptyList()
+    private val router by lazy { HybridRouter(context) }
 
     // JSON parser for structured output
     private val json = Json { ignoreUnknownKeys = true }
@@ -179,32 +182,32 @@ Now classify the user's message:
      * Fetches notifications (either by search or priority) and synthesizes summary
      */
     private suspend fun handleNotificationQuery(userMessage: String): String {
+        val semanticTool = tools["semantic_retrieval"]
         val notificationTool = tools["notification_filter"]
 
-        if (notificationTool == null) {
+        if (semanticTool == null && notificationTool == null) {
             return "I don't have access to your notifications right now."
         }
 
-        // Extract keywords from user message for potential search
-        val keywords = extractKeywords(userMessage)
+        val route = router.chooseRoute(estimatePromptTokens(userMessage))
+        Log.d(TAG, "HybridRouter selected route=$route for notification query")
 
-        // If user seems to be searching for specific content, use search
-        // Otherwise, just get priority notifications
-        val notificationsResult = if (keywords.isNotEmpty() &&
-            (userMessage.contains("find", ignoreCase = true) ||
-             userMessage.contains("show", ignoreCase = true) ||
-             userMessage.contains("about", ignoreCase = true) ||
-             userMessage.contains("from", ignoreCase = true))) {
-
-            Log.d(TAG, "Searching notifications with keywords: $keywords")
-            notificationTool.execute(
-                mapOf("action" to "search", "keywords" to keywords, "limit" to 10)
+        val notificationsResult = if (route == Route.LOCAL && semanticTool != null) {
+            val semanticResult = semanticTool.execute(
+                mapOf(
+                    "action" to "retrieve",
+                    "query" to userMessage,
+                    "k" to 10
+                )
             )
+            if (semanticResult.startsWith("Embeddings not ready") && notificationTool != null) {
+                Log.d(TAG, "Semantic retrieval unavailable, falling back to heuristic notification tool")
+                notificationTool.execute(mapOf("action" to "get_priority", "limit" to 8))
+            } else semanticResult
+        } else if (notificationTool != null) {
+            notificationTool.execute(mapOf("action" to "get_priority", "limit" to 8))
         } else {
-            // Default: get top priority notifications from heuristic scoring
-            notificationTool.execute(
-                mapOf("action" to "get_priority", "limit" to 8)
-            )
+            "I couldn't retrieve notifications right now."
         }
 
         val context = contextManager.loadContext()
@@ -553,29 +556,9 @@ IMPORTANT: Structure your response as follows:
         """.trimIndent()
     }
 
-    // ----- Helper Methods -----
-
-    /**
-     * Extract keywords from user message for notification search
-     * Simple stopword filtering - good enough for demo
-     */
-    private fun extractKeywords(message: String): List<String> {
-        // Common stopwords to filter out
-        val stopwords = setOf(
-            "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-            "have", "has", "had", "do", "does", "did", "will", "would", "should",
-            "could", "can", "may", "might", "must", "i", "me", "my", "you", "your",
-            "what", "what's", "whats", "show", "find", "get", "tell", "give",
-            "about", "from", "to", "for", "with", "of", "in", "on", "at", "by",
-            "notifications", "notification", "messages", "message"
-        )
-
-        // Split by whitespace and punctuation, filter stopwords, take meaningful words
-        return message.lowercase()
-            .replace(Regex("[^a-z0-9\\s@.]"), " ")
-            .split(Regex("\\s+"))
-            .filter { it.isNotBlank() && it.length > 2 && it !in stopwords }
-            .distinct()
+    private fun estimatePromptTokens(text: String): Int {
+        // Lightweight approximation for router input.
+        return (text.length / 4).coerceAtLeast(1)
     }
 
     // ----- Public API -----

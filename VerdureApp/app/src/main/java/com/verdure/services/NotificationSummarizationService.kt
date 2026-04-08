@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.IBinder
 import android.util.Log
 import com.cactus.CactusContextInitializer
+import com.verdure.core.CactusEmbeddingEngine
 import com.verdure.core.CactusLLMEngine
 import com.verdure.data.LLMResponse
 import com.verdure.data.NotificationData
@@ -13,6 +14,7 @@ import com.verdure.data.NotificationSummaryStore
 import com.verdure.data.UserContextManager
 import com.verdure.data.VerdurePreferences
 import com.verdure.tools.IncentiveTool
+import com.verdure.tools.SemanticRetrievalTool
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,6 +42,9 @@ class NotificationSummarizationService : Service() {
     private lateinit var summaryStore: NotificationSummaryStore
     private lateinit var preferences: VerdurePreferences
     private lateinit var incentiveTool: IncentiveTool
+    private lateinit var semanticRetrievalTool: SemanticRetrievalTool
+    private lateinit var embeddingEngine: CactusEmbeddingEngine
+    private var latestNotificationSnapshot: List<NotificationData> = emptyList()
     
     private var processingJob: Job? = null
     private val isProcessing = AtomicBoolean(false)
@@ -48,7 +53,6 @@ class NotificationSummarizationService : Service() {
     companion object {
         private const val TAG = "NotifSummarizationSvc"
         private const val TOP_PRIORITIES_COUNT = 5  // Show top N highest-scoring notifications
-        private const val MIN_SCORE_TO_SHOW = -5  // Include everything (even negative scores)
         private const val RAW_NOTIFICATION_MAX_LENGTH = 100  // Truncation length for fallback
         private const val DEBOUNCE_DELAY_MS = 1000L  // Wait 1 second to batch multiple notifications (reduced for faster updates)
         private const val IMPORTANT_SCORE_THRESHOLD = 5  // Only replace widget if new batch has a notification scoring >= this
@@ -87,6 +91,17 @@ class NotificationSummarizationService : Service() {
                 contextManager.loadContext()
             }
             notificationFilter = NotificationFilter(userContext)
+            semanticRetrievalTool = SemanticRetrievalTool(applicationContext, contextManager)
+            embeddingEngine = CactusEmbeddingEngine.getInstance(applicationContext)
+
+            scope.launch {
+                Log.d(TAG, "Initializing embedding engine for semantic retrieval...")
+                if (embeddingEngine.initialize()) {
+                    Log.d(TAG, "Embedding engine initialized for semantic retrieval")
+                } else {
+                    Log.w(TAG, "Embedding engine not ready, widget summarizer will fallback")
+                }
+            }
             
             // Initialize summary store
             summaryStore = NotificationSummaryStore(applicationContext)
@@ -126,6 +141,7 @@ class NotificationSummarizationService : Service() {
     private fun startMonitoring() {
         scope.launch {
             VerdureNotificationListener.notifications.collect { allNotifications ->
+                latestNotificationSnapshot = allNotifications
                 // Cancel any pending debounce (hasn't started LLM work yet)
                 processingJob?.cancel()
                 
@@ -176,35 +192,44 @@ class NotificationSummarizationService : Service() {
             return
         }
         
-        // PASS 1: Score all notifications and take top N highest-scoring ones for summarization
+        // PASS 1 fallback: Score all notifications and take top N highest-scoring ones
+        // if semantic retrieval is unavailable.
         val scoredNotifications = notifications
             .map { it to notificationFilter.scoreNotification(it) }
             .sortedByDescending { (_, score) -> score }
-        
-        val topPriorityNotifications = scoredNotifications
-            .take(TOP_PRIORITIES_COUNT)
-            .map { (notif, score) -> 
-                Log.d(TAG, "Top priority notification (score $score): ${notif.appName} - ${notif.title}")
-                notif
-            }
-        
+
         val topMaxScore = scoredNotifications.firstOrNull()?.second ?: 0
         
-        // Check if we've already summarized these exact notifications
-        val newNotifications = topPriorityNotifications.filter { notif ->
-            !summaryStore.hasBeenSummarized(notif.id)
-        }
-        
-        if (newNotifications.isNotEmpty()) {
-            // Check if the new notifications are important enough to replace the current widget content
-            if (shouldUpdateWidget(topMaxScore)) {
-                Log.d(TAG, "Found ${newNotifications.size} new top priority notifications to summarize (maxScore=$topMaxScore)")
-                summarizeNotifications(newNotifications, topMaxScore)
-            } else {
-                Log.d(TAG, "Skipping widget update: new notifications (maxScore=$topMaxScore) not important enough to replace current summary")
+        // Try semantic retrieval first for widget summary context.
+        val semanticSummarized = summarizeWithSemanticRetrievalIfAvailable()
+        if (!semanticSummarized) {
+            // Existing fallback path.
+            val topPriorityNotifications = scoredNotifications
+                .take(TOP_PRIORITIES_COUNT)
+                .map { (notif, score) ->
+                    Log.d(TAG, "Top priority notification (score $score): ${notif.appName} - ${notif.title}")
+                    notif
+                }
+            val newNotifications = topPriorityNotifications.filter { notif ->
+                !summaryStore.hasBeenSummarized(notif.id)
             }
-        } else {
-            Log.d(TAG, "All top priority notifications already summarized")
+
+            if (newNotifications.isNotEmpty()) {
+                if (shouldUpdateWidget(topMaxScore)) {
+                    Log.d(
+                        TAG,
+                        "Found ${newNotifications.size} new top priority notifications to summarize (maxScore=$topMaxScore)"
+                    )
+                    summarizeNotifications(newNotifications, topMaxScore)
+                } else {
+                    Log.d(
+                        TAG,
+                        "Skipping widget update: new notifications (maxScore=$topMaxScore) not important enough to replace current summary"
+                    )
+                }
+            } else {
+                Log.d(TAG, "All top priority notifications already summarized")
+            }
         }
         
         // Dismiss ALL eligible notifications (not just the ones that were summarized)
@@ -315,6 +340,73 @@ class NotificationSummarizationService : Service() {
         updateWidget()
     }
 
+    private suspend fun summarizeWithSemanticRetrievalIfAvailable(): Boolean {
+        if (!::semanticRetrievalTool.isInitialized || !::embeddingEngine.isInitialized || !embeddingEngine.isReady()) {
+            Log.d(TAG, "Semantic summarization skipped - embeddings not ready")
+            return false
+        }
+
+        return try {
+            Log.d(TAG, "Running semantic retrieval for widget summary")
+            val retrieval = semanticRetrievalTool.execute(
+                mapOf(
+                    "action" to "retrieve",
+                    "query" to "what is most urgent right now",
+                    "k" to TOP_PRIORITIES_COUNT
+                )
+            )
+            if (retrieval.startsWith("Embeddings not ready") || retrieval.startsWith("No semantically relevant")) {
+                return false
+            }
+
+            if (!::llmEngine.isInitialized) {
+                return false
+            }
+
+            val prompt = """
+Summarize these top priority notifications for a home screen widget. Be EXTREMELY concise.
+
+Notifications:
+$retrieval
+
+RULES (CRITICAL):
+- Maximum 3 bullet points total
+- Each point: 6-8 words maximum
+- Start with • (bullet)
+- Action-focused only
+- NO app names
+- NO greetings or extra text
+- Do NOT include any XML tags like <thinking>, <output>, <response>, etc.
+- Output ONLY the bullet points, nothing else
+            """.trimIndent()
+
+            val rawSummary = llmEngine.generateContent(prompt)
+            val cleanSummary = LLMResponse.parse(rawSummary).response
+            val ids = extractNotificationIdsFromRetrieval(retrieval).ifEmpty {
+                latestNotificationSnapshot
+                    .take(TOP_PRIORITIES_COUNT)
+                    .map { it.id }
+            }
+            val maxScore = IMPORTANT_SCORE_THRESHOLD
+            summaryStore.saveSummary(ids, cleanSummary, System.currentTimeMillis(), maxScore)
+            updateWidget()
+            Log.d(TAG, "Semantic retrieval widget summary completed")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Semantic retrieval summary failed, using fallback", e)
+            false
+        }
+    }
+
+    private fun extractNotificationIdsFromRetrieval(retrieval: String): List<Int> {
+        val ids = mutableListOf<Int>()
+        val regex = Regex("\\[id=(\\d+)]")
+        regex.findAll(retrieval).forEach { match ->
+            match.groupValues.getOrNull(1)?.toIntOrNull()?.let { ids.add(it) }
+        }
+        return ids.distinct()
+    }
+
     private fun dismissProcessedNotifications(notifications: List<NotificationData>) {
         // Check if auto-dismiss is enabled and background context is enabled
         if (!preferences.autoDismissEnabled || !preferences.dismissAfterBackground) {
@@ -366,7 +458,7 @@ class NotificationSummarizationService : Service() {
         
         Log.d(TAG, "Saved raw fallback summary for ${notifications.size} notifications")
     }
-    
+
     /**
      * Build LLM prompt for notification summarization.
      * Optimized for widget display: ultra-concise, actionable bullet points.
@@ -375,7 +467,7 @@ class NotificationSummarizationService : Service() {
         val notifList = notifications.joinToString("\n") { notif ->
             "${notif.appName}: ${notif.title} - ${notif.text}"
         }
-        
+
         return """
 Summarize these top priority notifications for a home screen widget. Be EXTREMELY concise.
 
