@@ -6,6 +6,8 @@ import com.cactus.CactusCompletionParams
 import com.cactus.CactusContextInitializer
 import com.cactus.CactusInitParams
 import com.cactus.CactusLM
+import com.cactus.CactusModel
+import com.cactus.CactusModelManager
 import com.cactus.ChatMessage
 import com.cactus.InferenceMode
 import com.cactus.models.CactusTool
@@ -59,6 +61,79 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
     }
 
     fun getActiveModelSlug(): String? = loadedModelSlug
+
+    suspend fun getAvailableModels(): List<CactusModel> {
+        return try {
+            val lm = cactusLM
+            if (lm != null) {
+                lm.getModels()
+            } else {
+                CactusLM().getModels()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch available models", e)
+            emptyList()
+        }
+    }
+
+    fun getDownloadedModels(): List<String> {
+        return try {
+            CactusModelManager.getDownloadedModels()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch downloaded models", e)
+            emptyList()
+        }
+    }
+
+    fun getModelsDirectory(): String {
+        return try {
+            CactusModelManager.getModelsDirectory()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to read models directory", e)
+            "(unknown)"
+        }
+    }
+
+    suspend fun switchModel(
+        targetModelSlug: String,
+        removePreviousModel: Boolean,
+        onProgress: ((String) -> Unit)? = null
+    ): Boolean {
+        val lm = cactusLM ?: return initialize(onProgress = onProgress) &&
+            switchModel(targetModelSlug, removePreviousModel, onProgress)
+        val previous = loadedModelSlug
+
+        return try {
+            onProgress?.invoke("⏳ Downloading selected model ($targetModelSlug)…")
+            lm.downloadModel(targetModelSlug)
+            onProgress?.invoke("⚙️ Loading selected model ($targetModelSlug)…")
+            lm.initializeModel(
+                CactusInitParams(
+                    model = targetModelSlug,
+                    contextSize = CONTEXT_SIZE
+                )
+            )
+
+            loadedModelSlug = targetModelSlug
+            lastInitError = null
+            onProgress?.invoke("✅ Switched to $targetModelSlug")
+
+            if (removePreviousModel && !previous.isNullOrBlank() && previous != targetModelSlug) {
+                val deleted = CactusModelManager.deleteModel(previous)
+                if (deleted) {
+                    onProgress?.invoke("🧹 Removed previous model: $previous")
+                } else {
+                    onProgress?.invoke("⚠️ Could not remove previous model: $previous")
+                }
+            }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed switching model to $targetModelSlug", e)
+            lastInitError = "${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
+            onProgress?.invoke("❌ Failed to switch model: $lastInitError")
+            false
+        }
+    }
 
     fun configureToolCalling(
         toolsProvider: suspend () -> List<CactusTool>,

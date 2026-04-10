@@ -51,6 +51,22 @@
                 android:layout_marginEnd="8dp"
                 android:contentDescription="Incentives/Goals Tracker"/>
 
+            <!-- Models Button -->
+            <TextView
+                android:id="@+id/modelsButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Models"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:textColor="@color/accent_primary"
+                android:padding="8dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:layout_marginEnd="8dp"
+                android:contentDescription="Model Management"/>
+
             <!-- Settings Button -->
             <ImageView
                 android:id="@+id/settingsButton"

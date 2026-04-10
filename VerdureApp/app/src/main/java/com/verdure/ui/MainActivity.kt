@@ -8,11 +8,13 @@ import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -45,6 +47,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var requestPermissionButton: Button
     private lateinit var settingsButton: android.widget.ImageView
     private lateinit var incentivesButton: TextView
+    private lateinit var modelsButton: TextView
 
     // Chat components
     private lateinit var chatInput: EditText
@@ -73,6 +76,7 @@ class MainActivity : AppCompatActivity() {
         requestPermissionButton = findViewById(R.id.requestPermissionButton)
         settingsButton = findViewById(R.id.settingsButton)
         incentivesButton = findViewById(R.id.incentivesButton)
+        modelsButton = findViewById(R.id.modelsButton)
         modelSlugText.text = "Model: ${CactusLLMEngine.getConfiguredModelSlug()}"
         Log.i(TAG, "LLM self-check configured model slug=${CactusLLMEngine.getConfiguredModelSlug()}")
 
@@ -111,6 +115,10 @@ class MainActivity : AppCompatActivity() {
         // Incentives button handler
         incentivesButton.setOnClickListener {
             openIncentives()
+        }
+
+        modelsButton.setOnClickListener {
+            openModelManager()
         }
 
         // Chat send button handler
@@ -168,6 +176,10 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 if (initialized) {
                     modelSlugText.text = "Model: ${llmEngine.getActiveModelSlug() ?: CactusLLMEngine.getConfiguredModelSlug()} (active)"
+                    val toolSummary = llmEngine.getToolCallingSupportSummary()
+                    if (toolSummary.isNotBlank()) {
+                        addMessageToChat("System", toolSummary, null)
+                    }
                     // Initialize user context manager
                     val contextManager = UserContextManager.getInstance(applicationContext)
 
@@ -476,6 +488,108 @@ class MainActivity : AppCompatActivity() {
                 .filter { it.isNotBlank() }
         }
         return trimmed.trim('"', '\'')
+    }
+
+    private fun openModelManager() {
+        if (!::llmEngine.isInitialized) {
+            addMessageToChat("System", "AI engine is still loading. Try model switching after initialization.", null)
+            return
+        }
+
+        lifecycleScope.launch {
+            val models = llmEngine.getAvailableModels()
+            if (models.isEmpty()) {
+                runOnUiThread {
+                    addMessageToChat("System", "No models discovered from Cactus registry right now.", null)
+                }
+                return@launch
+            }
+
+            val active = llmEngine.getActiveModelSlug()
+            val downloaded = llmEngine.getDownloadedModels().toSet()
+            val labels = models.map { model ->
+                val activeTag = if (model.slug == active) " (active)" else ""
+                val downloadedTag = if (downloaded.contains(model.slug)) " • downloaded" else ""
+                val toolTag = if (model.supports_tool_calling) " • tools" else ""
+                "${model.name} [${model.slug}] • ${model.size_mb}MB$downloadedTag$toolTag$activeTag"
+            }
+
+            runOnUiThread {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Select AI Model")
+                    .setItems(labels.toTypedArray()) { _, which ->
+                        val chosen = models[which]
+                        confirmAndSwitchModel(chosen.slug, active)
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun confirmAndSwitchModel(targetSlug: String, previousSlug: String?) {
+        val message = buildString {
+            append("Switch to:\n$targetSlug\n\n")
+            append("Verdure will download and activate this model.\n")
+            if (!previousSlug.isNullOrBlank() && previousSlug != targetSlug) {
+                append("After a successful switch, the previous model will be removed:\n$previousSlug")
+            } else {
+                append("No previous model will be removed.")
+            }
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Switch model?")
+            .setMessage(message)
+            .setPositiveButton("Switch") { _, _ ->
+                performModelSwitch(targetSlug)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun performModelSwitch(targetSlug: String) {
+        if (!::llmEngine.isInitialized) return
+
+        sendButton.isEnabled = false
+        chatInput.isEnabled = false
+
+        val statusBubble = addMessageToChat(
+            "System",
+            "⏳ Starting model switch to $targetSlug...",
+            null
+        )
+
+        lifecycleScope.launch {
+            val previous = llmEngine.getActiveModelSlug()
+            val switched = llmEngine.switchModel(
+                targetModelSlug = targetSlug,
+                removePreviousModel = true
+            ) { progress ->
+                runOnUiThread { statusBubble.text = progress }
+            }
+
+            runOnUiThread {
+                if (switched) {
+                    modelSlugText.text = "Model: ${llmEngine.getActiveModelSlug() ?: targetSlug} (active)"
+                    val toolSummary = llmEngine.getToolCallingSupportSummary()
+                    statusBubble.text = "✅ Switched to ${llmEngine.getActiveModelSlug()}\n$toolSummary"
+                } else {
+                    val details = llmEngine.getLastInitError() ?: "unknown reason"
+                    statusBubble.text = "❌ Model switch failed: $details"
+                }
+                sendButton.isEnabled = true
+                chatInput.isEnabled = true
+                chatInput.requestFocus()
+                scrollToBottom()
+            }
+
+            // Keep history and VerdureAI context coherent after switch.
+            if (switched && ::verdureAI.isInitialized) {
+                verdureAI.setRecentConversationTurns(chatHistoryStore.getRecentForPrompt())
+                Log.i(TAG, "Model switched from $previous to ${llmEngine.getActiveModelSlug()}")
+            }
+        }
     }
 
     /**
