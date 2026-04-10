@@ -18,7 +18,7 @@ import androidx.sqlite.driver.bundled.BundledSQLiteDriver
         EmbeddingEntity::class,
         EntityMentionEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class NotificationDatabase : RoomDatabase() {

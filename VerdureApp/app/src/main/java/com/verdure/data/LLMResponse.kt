@@ -22,14 +22,26 @@ data class LLMResponse(
             RegexOption.DOT_MATCHES_ALL
         )
 
+        private val THINKING_PREFIX_REGEX = Regex(
+            "(?is)^\\s*(?:thinking|thoughts?|reasoning|analysis)\\s*:\\s*(.+?)(?=\\n\\s*(?:response|answer|final)\\s*:|$)"
+        )
+
+        private val RESPONSE_PREFIX_REGEX = Regex(
+            "(?is)^\\s*(?:response|answer|final)\\s*:\\s*(.+)$"
+        )
+
         private val ALL_KNOWN_TAGS = Regex(
             "</?(?:thinking|think|response|answer|output)>",
             RegexOption.IGNORE_CASE
         )
 
         fun parse(rawOutput: String): LLMResponse {
+            val cleanedRaw = stripTags(rawOutput).trim()
             val thinking = THINKING_REGEX.find(rawOutput)?.groupValues?.get(1)?.trim()
+                ?: extractSection(cleanedRaw, "thinking")
             val response = RESPONSE_REGEX.find(rawOutput)?.groupValues?.get(1)?.trim()
+                ?: extractSection(cleanedRaw, "response")
+                ?: RESPONSE_PREFIX_REGEX.find(cleanedRaw)?.groupValues?.get(1)?.trim()
 
             return when {
                 response != null -> {
@@ -43,9 +55,23 @@ data class LLMResponse(
                     LLMResponse(thinking, remainingText.ifEmpty { rawOutput.trim() })
                 }
                 else -> {
-                    LLMResponse(null, stripTags(rawOutput).trim())
+                    val prefixedThinking = THINKING_PREFIX_REGEX.find(cleanedRaw)?.groupValues?.get(1)?.trim()
+                    if (!prefixedThinking.isNullOrBlank()) {
+                        val finalText = RESPONSE_PREFIX_REGEX.find(cleanedRaw)?.groupValues?.get(1)?.trim()
+                            ?: cleanedRaw.replace(THINKING_PREFIX_REGEX, "").trim()
+                        LLMResponse(prefixedThinking, finalText.ifBlank { cleanedRaw })
+                    } else {
+                        LLMResponse(null, cleanedRaw)
+                    }
                 }
             }
+        }
+
+        private fun extractSection(text: String, section: String): String? {
+            val regex = Regex(
+                "(?is)$section\\s*:\\s*(.+?)(?=\\n\\s*(?:thinking|response|answer|final)\\s*:|$)"
+            )
+            return regex.find(text)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotBlank() }
         }
 
         /**

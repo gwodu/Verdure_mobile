@@ -47,13 +47,12 @@ class NotificationTool(
         val action = params["action"] as? String
         val clearAfterView = params["clear_after_view"] as? Boolean ?: DEFAULT_CLEAR_AFTER_VIEW
 
-        // If action is "get_all", just return formatted notification list (no LLM)
+        // If action is "get_all", return recent notifications (no score threshold)
         if (action == "get_all") {
-            // Get priority-filtered notifications from Room (last 24h)
-            // Limit to 8 priority notifications (safe token budget: ~1200 tokens total)
-            val notifications = getPriorityNotifications(limit = 8)
+            val limit = params["limit"] as? Int ?: 8
+            val notifications = repository.getRecentNotifications(limit)
             if (notifications.isEmpty()) {
-                return "No priority notifications right now."
+                return "No recent notifications right now."
             }
             val formatted = formatNotificationsForContext(notifications)
             maybeDismissViewedNotifications(

@@ -246,10 +246,40 @@ class VerdureNotificationListener : NotificationListenerService() {
             // Sort by timestamp, most recent first
             notificationList.sortByDescending { it.timestamp }
             _notifications.value = notificationList
+            backfillNotificationsToPersistence(notificationList)
 
             Log.d(TAG, "Loaded ${notificationList.size} existing notifications")
         } catch (e: Exception) {
             Log.e(TAG, "Error loading existing notifications", e)
+        }
+    }
+
+    /**
+     * Persist active tray notifications discovered at listener connect time.
+     *
+     * Without this bootstrap pass, notifications that were already present when Verdure starts
+     * only live in StateFlow and never enter Room/embeddings, making "what's urgent?" look empty.
+     */
+    private fun backfillNotificationsToPersistence(notifications: List<NotificationData>) {
+        if (notifications.isEmpty()) return
+        if (!::notificationRepository.isInitialized || !::notificationFilter.isInitialized) return
+
+        serviceScope.launch {
+            notifications.forEach { notification ->
+                try {
+                    val existing = notificationRepository.findBySystemKey(notification.systemKey)
+                    if (existing != null) return@forEach
+
+                    val score = notificationFilter.scoreNotification(notification)
+                    val stored = notificationRepository.storeNotificationAndGet(notification, score)
+                    if (stored != null && ::ingestionPipeline.isInitialized) {
+                        ingestionPipeline.enqueue(stored.toNotificationData())
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to backfill notification ${notification.systemKey}", e)
+                }
+            }
+            Log.d(TAG, "Backfill complete for ${notifications.size} active notifications")
         }
     }
 
