@@ -53,6 +53,10 @@ abstract class NotificationDatabase : RoomDatabase() {
                     object : Callback() {
                         override fun onOpen(connection: androidx.sqlite.SQLiteConnection) {
                             super.onOpen(connection)
+                            if (!SQLiteVecLoader.isVectorStoreAvailable()) {
+                                Log.w(TAG, "Skipping sqlite-vec table setup: vector store disabled")
+                                return
+                            }
                             try {
                                 connection.execSQL(
                                     """
@@ -66,6 +70,10 @@ abstract class NotificationDatabase : RoomDatabase() {
                                 Log.d(TAG, "sqlite-vec virtual table ready (vec0 flat index, HNSW TODO)")
                             } catch (e: Exception) {
                                 Log.e(TAG, "Failed creating sqlite-vec virtual table", e)
+                                SQLiteVecLoader.disableVectorStore(
+                                    reason = "Virtual table creation failed on open",
+                                    throwable = e
+                                )
                             }
                         }
                     }
