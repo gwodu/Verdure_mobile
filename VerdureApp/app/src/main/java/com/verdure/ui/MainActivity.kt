@@ -28,10 +28,14 @@ import com.verdure.data.NotificationRepository
 import com.verdure.data.UserContextManager
 import com.verdure.data.ChatHistoryStore
 import com.verdure.services.IngestionPipeline
+import com.verdure.services.CalendarReader
 import com.verdure.services.VerdureNotificationListener
 import com.verdure.tools.AppPrioritizationTool
+import com.verdure.tools.CalendarTool
 import com.verdure.tools.NotificationTool
 import com.verdure.tools.SemanticRetrievalTool
+import com.verdure.tools.Tool
+import com.verdure.tools.toCactusTool
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
@@ -175,9 +179,32 @@ class MainActivity : AppCompatActivity() {
                     verdureAI.setRecentConversationTurns(chatHistoryStore.getRecentForPrompt())
 
                     // Register tools (NotificationTool needs context for Room access)
-                    verdureAI.registerTool(NotificationTool(applicationContext, llmEngine, contextManager))
-                    verdureAI.registerTool(AppPrioritizationTool(contextManager, appsManager))
-                    verdureAI.registerTool(SemanticRetrievalTool(applicationContext, contextManager))
+                    val registeredTools = mutableListOf<Tool>()
+                    val notificationTool = NotificationTool(applicationContext, llmEngine, contextManager)
+                    val appTool = AppPrioritizationTool(contextManager, appsManager)
+                    val semanticTool = SemanticRetrievalTool(applicationContext, contextManager)
+                    val calendarTool = CalendarTool(CalendarReader(applicationContext))
+
+                    registeredTools.add(notificationTool)
+                    registeredTools.add(appTool)
+                    registeredTools.add(semanticTool)
+                    registeredTools.add(calendarTool)
+                    registeredTools.forEach { verdureAI.registerTool(it) }
+                    Log.i(TAG, "Registered tools: ${registeredTools.joinToString { it.name }}")
+
+                    // Provide native Cactus tool-calling bridge.
+                    llmEngine.configureToolCalling(
+                        toolsProvider = { registeredTools.map { it.toCactusTool() } },
+                        toolExecutor = { toolName, rawArgs ->
+                            val tool = registeredTools.firstOrNull { it.name == toolName }
+                                ?: return@configureToolCalling "Unknown tool: $toolName"
+
+                            val typedArgs = rawArgs.mapValues { (_, value) ->
+                                parseToolArgumentValue(value)
+                            }
+                            tool.execute(typedArgs)
+                        }
+                    )
 
                     // Initialize ingestion pipeline (runs independently in background).
                     IngestionPipeline.getInstance(applicationContext).warmup()
@@ -433,6 +460,22 @@ class MainActivity : AppCompatActivity() {
         chatScrollView.post {
             chatScrollView.fullScroll(ScrollView.FOCUS_DOWN)
         }
+    }
+
+    private fun parseToolArgumentValue(raw: String): Any {
+        val trimmed = raw.trim()
+        if (trimmed.equals("true", ignoreCase = true) || trimmed.equals("false", ignoreCase = true)) {
+            return trimmed.toBoolean()
+        }
+        trimmed.toIntOrNull()?.let { return it }
+        trimmed.toDoubleOrNull()?.let { return it }
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+            return trimmed.removePrefix("[").removeSuffix("]")
+                .split(",")
+                .map { it.trim().trim('"', '\'') }
+                .filter { it.isNotBlank() }
+        }
+        return trimmed.trim('"', '\'')
     }
 
     /**

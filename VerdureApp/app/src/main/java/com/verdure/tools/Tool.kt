@@ -1,5 +1,9 @@
 package com.verdure.tools
 
+import com.cactus.models.CactusTool
+import com.cactus.models.ToolParameter
+import com.cactus.models.createTool
+
 /**
  * Base interface for all Verdure tools
  * Tools are specialized AI capabilities that can be invoked by VerdureAI
@@ -22,4 +26,22 @@ interface Tool {
      * @return Result as a string (can be JSON, plain text, etc.)
      */
     suspend fun execute(params: Map<String, Any>): String
+
+    /**
+     * Optional argument schema for native Cactus tool calling.
+     * Keys are argument names; values describe type/description/required.
+     *
+     * Default empty map keeps compatibility with existing tools.
+     */
+    val argumentSchema: Map<String, ToolParameter>
+        get() = emptyMap()
 }
+
+/**
+ * Adapter from Verdure Tool interface to Cactus tool schema.
+ */
+fun Tool.toCactusTool(): CactusTool = createTool(
+    name = name,
+    description = description,
+    parameters = argumentSchema
+)

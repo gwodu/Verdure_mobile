@@ -10,6 +10,7 @@ import com.verdure.data.StoredNotification
 import com.verdure.data.UserContextManager
 import com.verdure.data.VerdurePreferences
 import com.verdure.services.VerdureNotificationListener
+import com.cactus.models.ToolParameter
 
 /**
  * Tool for analyzing and prioritizing notifications
@@ -42,6 +43,28 @@ class NotificationTool(
 
     override val name: String = "notification_filter"
     override val description: String = "Analyzes and prioritizes notifications based on importance and urgency"
+    override val argumentSchema: Map<String, ToolParameter> = mapOf(
+        "action" to ToolParameter(
+            type = "string",
+            description = "One of: get_priority, get_all, search",
+            required = true
+        ),
+        "limit" to ToolParameter(
+            type = "number",
+            description = "Maximum notifications to return",
+            required = false
+        ),
+        "keywords" to ToolParameter(
+            type = "array",
+            description = "Keywords for search action",
+            required = false
+        ),
+        "clear_after_view" to ToolParameter(
+            type = "boolean",
+            description = "Whether to dismiss viewed notifications after processing",
+            required = false
+        )
+    )
 
     override suspend fun execute(params: Map<String, Any>): String {
         val action = params["action"] as? String

@@ -9,6 +9,7 @@ import com.verdure.data.StoredNotification
 import com.verdure.data.UserContextManager
 import com.verdure.data.VectorIndex
 import com.verdure.data.toNotificationDataForScoring
+import com.cactus.models.ToolParameter
 import kotlin.math.exp
 
 /**
@@ -37,6 +38,23 @@ class SemanticRetrievalTool(
     override val name: String = "semantic_retrieval"
     override val description: String =
         "Retrieves relevant notifications using embeddings plus recency and heuristic re-ranking"
+    override val argumentSchema: Map<String, ToolParameter> = mapOf(
+        "action" to ToolParameter(
+            type = "string",
+            description = "Action to run: retrieve",
+            required = false
+        ),
+        "query" to ToolParameter(
+            type = "string",
+            description = "Natural language user query",
+            required = true
+        ),
+        "k" to ToolParameter(
+            type = "number",
+            description = "Number of notifications to return",
+            required = false
+        )
+    )
 
     private val embeddingEngine by lazy { CactusEmbeddingEngine.getInstance(context) }
     private val vectorIndex by lazy { VectorIndex(context) }

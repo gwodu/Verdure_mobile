@@ -30,9 +30,25 @@ interface LLMEngine {
     suspend fun generateContent(prompt: String): String
 
     /**
+     * Generate content with a list of prior chat messages preserved as model context.
+     * Default implementation falls back to single-prompt generation.
+     */
+    suspend fun generateContentWithHistory(messages: List<ChatTurn>): String {
+        val merged = messages.joinToString("\n") { turn ->
+            "${turn.role}: ${turn.content}"
+        }
+        return generateContent(merged)
+    }
+
+    /**
      * Check if the engine is ready to use
      *
      * @return true if initialized and ready, false otherwise
      */
     fun isReady(): Boolean
 }
+
+data class ChatTurn(
+    val role: String,
+    val content: String
+)

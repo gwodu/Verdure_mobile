@@ -1,5 +1,6 @@
 package com.verdure.tools
 
+import com.cactus.models.ToolParameter
 import android.util.Log
 import com.verdure.data.InstalledAppsManager
 import com.verdure.data.UserContextManager
@@ -27,6 +28,18 @@ class AppPrioritizationTool(
 
     override val name: String = "app_prioritization"
     override val description: String = "Manages user's app priority ordering for notification scoring"
+    override val argumentSchema: Map<String, ToolParameter> = mapOf(
+        "action" to ToolParameter(
+            type = "string",
+            description = "Action: prioritize_app, deprioritize_app, or get_current_order",
+            required = true
+        ),
+        "app_name" to ToolParameter(
+            type = "string",
+            description = "Human-readable app name for prioritize/deprioritize actions",
+            required = false
+        )
+    )
 
     override suspend fun execute(params: Map<String, Any>): String {
         val action = params["action"] as? String ?: return "No action specified"

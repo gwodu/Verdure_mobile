@@ -189,7 +189,7 @@ Now classify the user's message:
         val notificationTool = tools["notification_filter"]
 
         if (semanticTool == null && notificationTool == null) {
-            return "I don't have access to your notifications right now."
+            return "Notification tools are not registered yet. Please restart the app and ensure notification access is granted."
         }
 
         val route = router.chooseRoute(estimatePromptTokens(userMessage))
