@@ -74,9 +74,21 @@ class SemanticRetrievalTool(
         if (!embeddingEngine.isReady()) {
             return "Embeddings not ready"
         }
+        val queryVector = try {
+            embeddingEngine.embed(query)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed generating query embedding", e)
+            return "Embeddings not ready"
+        }
+        vectorIndex.setVectorDimension(queryVector.size)
+        vectorIndex.ensureReady()
 
-        val queryVector = embeddingEngine.embed(query)
-        val vectorResults = vectorIndex.searchTopK(queryVector, topK)
+        val vectorResults = try {
+            vectorIndex.searchTopK(queryVector, topK)
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "Vector search dimension mismatch; falling back gracefully", e)
+            return "No semantically relevant notifications found."
+        }
         if (vectorResults.isEmpty()) {
             Log.d(TAG, "Retrieval completed with 0 vector matches")
             return "No semantically relevant notifications found."

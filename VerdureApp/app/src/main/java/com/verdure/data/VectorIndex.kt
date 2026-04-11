@@ -18,14 +18,22 @@ class VectorIndex(private val context: android.content.Context) {
     companion object {
         private const val TAG = "VectorIndex"
         private const val VEC_TABLE = "notification_embeddings_vec"
-        private const val VECTOR_DIMENSION = 384
+        private const val DEFAULT_VECTOR_DIMENSION = 1024
     }
 
     private val database: RoomDatabase by lazy {
         NotificationDatabase.getInstance(context)
     }
+    @Volatile
+    private var vectorDimension: Int = DEFAULT_VECTOR_DIMENSION
 
     private fun isDisabled(): Boolean = !SQLiteVecLoader.isVectorStoreAvailable()
+
+    fun setVectorDimension(dimension: Int) {
+        if (dimension <= 0) return
+        vectorDimension = dimension
+        Log.i(TAG, "Vector dimension set to $vectorDimension")
+    }
 
     suspend fun ensureReady() {
         if (isDisabled()) {
@@ -39,12 +47,12 @@ class VectorIndex(private val context: android.content.Context) {
                         """
                         CREATE VIRTUAL TABLE IF NOT EXISTS $VEC_TABLE USING vec0(
                           embedding_id INTEGER PRIMARY KEY,
-                          embedding FLOAT[$VECTOR_DIMENSION] distance_metric=cosine
+                          embedding FLOAT[$vectorDimension] distance_metric=cosine
                         )
                         """.trimIndent()
                     )
                 }
-                Log.d(TAG, "sqlite-vec table ensured: $VEC_TABLE dim=$VECTOR_DIMENSION")
+                Log.d(TAG, "sqlite-vec table ensured: $VEC_TABLE dim=$vectorDimension")
             } catch (e: Exception) {
                 SQLiteVecLoader.disableVectorStore("ensureReady failed for vec0 table", e)
             }
@@ -52,8 +60,8 @@ class VectorIndex(private val context: android.content.Context) {
     }
 
     suspend fun insert(id: Long, vector: FloatArray) {
-        require(vector.size == VECTOR_DIMENSION) {
-            "Vector dimension mismatch. expected=$VECTOR_DIMENSION actual=${vector.size}"
+        require(vector.size == vectorDimension) {
+            "Vector dimension mismatch. expected=$vectorDimension actual=${vector.size}"
         }
         if (isDisabled()) {
             Log.w(TAG, "Skipping vector insert id=$id; sqlite-vec vector store is disabled")
@@ -107,8 +115,8 @@ class VectorIndex(private val context: android.content.Context) {
     }
 
     suspend fun searchTopK(queryVector: FloatArray, k: Int): List<Pair<Long, Float>> {
-        require(queryVector.size == VECTOR_DIMENSION) {
-            "Query vector dimension mismatch. expected=$VECTOR_DIMENSION actual=${queryVector.size}"
+        require(queryVector.size == vectorDimension) {
+            "Query vector dimension mismatch. expected=$vectorDimension actual=${queryVector.size}"
         }
         if (k <= 0) return emptyList()
         if (isDisabled()) {

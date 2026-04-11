@@ -58,6 +58,7 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
         }
 
         fun getConfiguredModelSlug(): String = MODEL_CANDIDATES.first()
+        fun getConfiguredModelCandidates(): List<String> = MODEL_CANDIDATES
     }
 
     fun getActiveModelSlug(): String? = loadedModelSlug

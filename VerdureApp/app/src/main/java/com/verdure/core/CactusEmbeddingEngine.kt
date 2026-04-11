@@ -21,6 +21,7 @@ class CactusEmbeddingEngine private constructor(private val context: Context) {
     private var cactusEmbeddingLM: CactusLM? = null
     private var isInitialized = false
     private var loadedModelSlug: String? = null
+    @Volatile private var embeddingDimension: Int? = null
     @Volatile private var lastInitError: String? = null
     private val initMutex = Mutex()
     private val inferenceMutex = Mutex()
@@ -108,6 +109,7 @@ class CactusEmbeddingEngine private constructor(private val context: Context) {
                                     "Model '$slug' loaded but did not return usable embeddings"
                                 )
                             }
+                            embeddingDimension = smokeTest.embeddings.size
 
                             cactusEmbeddingLM = lm
                             isInitialized = true
@@ -126,6 +128,7 @@ class CactusEmbeddingEngine private constructor(private val context: Context) {
                     isInitialized = false
                     cactusEmbeddingLM = null
                     loadedModelSlug = null
+                    embeddingDimension = null
                     val embeddingHint = availableSlugs
                         .filter { it.contains("embed", ignoreCase = true) }
                         .take(8)
@@ -142,6 +145,7 @@ class CactusEmbeddingEngine private constructor(private val context: Context) {
                     isInitialized = false
                     cactusEmbeddingLM = null
                     loadedModelSlug = null
+                    embeddingDimension = null
                     lastInitError = "Cactus embedding init failed: ${e.javaClass.simpleName}: ${e.message}"
                     onProgress?.invoke("❌ Failed to load embedding model: $lastInitError")
                     false
@@ -183,6 +187,13 @@ class CactusEmbeddingEngine private constructor(private val context: Context) {
     fun isReady(): Boolean = isInitialized && cactusEmbeddingLM?.isLoaded() == true
 
     fun getLastInitError(): String? = lastInitError
+
+    suspend fun getEmbeddingDimension(): Int {
+        embeddingDimension?.let { return it }
+        val sample = embed("embedding dimension check")
+        embeddingDimension = sample.size
+        return sample.size
+    }
 
     private fun resolveModelCandidates(
         configuredCandidates: List<String>,
@@ -227,6 +238,7 @@ class CactusEmbeddingEngine private constructor(private val context: Context) {
         cactusEmbeddingLM = null
         isInitialized = false
         loadedModelSlug = null
+        embeddingDimension = null
         lastInitError = null
     }
 }

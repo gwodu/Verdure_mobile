@@ -60,6 +60,10 @@ class IngestionPipeline private constructor(private val context: Context) {
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    suspend fun getEmbeddingDimensionForSchema(): Int {
+        return embeddingEngine.getEmbeddingDimension()
+    }
+
     fun enqueue(notificationData: NotificationData) {
         pendingNotifications.add(notificationData)
         triggerProcessing()
@@ -68,6 +72,8 @@ class IngestionPipeline private constructor(private val context: Context) {
     fun warmup() {
         scope.launch {
             try {
+                val embeddingDimension = embeddingEngine.getEmbeddingDimension()
+                vectorIndex.setVectorDimension(embeddingDimension)
                 vectorIndex.ensureReady()
                 Log.d(TAG, "Ingestion warmup complete")
             } catch (e: Exception) {
@@ -94,7 +100,6 @@ class IngestionPipeline private constructor(private val context: Context) {
 
     private suspend fun drainQueue() {
         drainMutex.withLock {
-            vectorIndex.ensureReady()
             if (!embeddingEngine.isReady()) {
                 Log.d(TAG, "Embedding model not ready - queue retained for later drain")
                 if (!embeddingEngine.initialize()) {
@@ -102,6 +107,14 @@ class IngestionPipeline private constructor(private val context: Context) {
                     return
                 }
             }
+            val embeddingDimension = try {
+                embeddingEngine.getEmbeddingDimension()
+            } catch (e: Exception) {
+                Log.e(TAG, "Embedding dimension unavailable; skipping queue drain", e)
+                return
+            }
+            vectorIndex.setVectorDimension(embeddingDimension)
+            vectorIndex.ensureReady()
 
             while (true) {
                 val next = pendingNotifications.poll() ?: break

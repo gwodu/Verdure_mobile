@@ -5,7 +5,6 @@ import android.util.Log
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
-import androidx.sqlite.execSQL
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 
 /**
@@ -57,24 +56,9 @@ abstract class NotificationDatabase : RoomDatabase() {
                                 Log.w(TAG, "Skipping sqlite-vec table setup: vector store disabled")
                                 return
                             }
-                            try {
-                                connection.execSQL(
-                                    """
-                                    CREATE VIRTUAL TABLE IF NOT EXISTS notification_embeddings_vec
-                                    USING vec0(
-                                        embedding_id INTEGER PRIMARY KEY,
-                                        embedding float[384] distance_metric=cosine
-                                    )
-                                    """.trimIndent()
-                                )
-                                Log.d(TAG, "sqlite-vec virtual table ready (vec0 flat index, HNSW TODO)")
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Failed creating sqlite-vec virtual table", e)
-                                SQLiteVecLoader.disableVectorStore(
-                                    reason = "Virtual table creation failed on open",
-                                    throwable = e
-                                )
-                            }
+                            // Table creation is handled by VectorIndex, once the embedding
+                            // model reports its actual dimension at runtime.
+                            Log.d(TAG, "sqlite-vec extension available on database open")
                         }
                     }
                 )

@@ -66,6 +66,14 @@ class MainActivity : AppCompatActivity() {
         private const val CALENDAR_PERMISSION_REQUEST = 100
     }
 
+    private data class ModelOption(
+        val slug: String,
+        val name: String,
+        val sizeMb: Int,
+        val supportsToolCalling: Boolean,
+        val isDiscovered: Boolean
+    )
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CactusContextInitializer.initialize(this)
@@ -497,7 +505,37 @@ class MainActivity : AppCompatActivity() {
         }
 
         lifecycleScope.launch {
-            val models = llmEngine.getAvailableModels()
+            val discoveredModels = llmEngine.getAvailableModels()
+            val configuredCandidates = CactusLLMEngine.getConfiguredModelCandidates()
+            val downloaded = llmEngine.getDownloadedModels().toSet()
+            val active = llmEngine.getActiveModelSlug()
+
+            val optionsBySlug = linkedMapOf<String, ModelOption>()
+            discoveredModels.forEach { model ->
+                optionsBySlug[model.slug.lowercase()] = ModelOption(
+                    slug = model.slug,
+                    name = model.name,
+                    sizeMb = model.size_mb,
+                    supportsToolCalling = model.supports_tool_calling,
+                    isDiscovered = true
+                )
+            }
+
+            configuredCandidates.forEach { slug ->
+                val key = slug.lowercase()
+                if (!optionsBySlug.containsKey(key)) {
+                    optionsBySlug[key] = ModelOption(
+                        slug = slug,
+                        name = slug.substringAfterLast("/"),
+                        sizeMb = 0,
+                        supportsToolCalling = false,
+                        isDiscovered = false
+                    )
+                }
+            }
+
+            val models = optionsBySlug.values.sortedBy { it.slug.lowercase() }
+
             if (models.isEmpty()) {
                 runOnUiThread {
                     addMessageToChat("System", "No models discovered from Cactus registry right now.", null)
@@ -505,13 +543,13 @@ class MainActivity : AppCompatActivity() {
                 return@launch
             }
 
-            val active = llmEngine.getActiveModelSlug()
-            val downloaded = llmEngine.getDownloadedModels().toSet()
             val labels = models.map { model ->
                 val activeTag = if (model.slug == active) " (active)" else ""
                 val downloadedTag = if (downloaded.contains(model.slug)) " • downloaded" else ""
-                val toolTag = if (model.supports_tool_calling) " • tools" else ""
-                "${model.name} [${model.slug}] • ${model.size_mb}MB$downloadedTag$toolTag$activeTag"
+                val toolTag = if (model.supportsToolCalling) " • tools" else ""
+                val sizeTag = if (model.sizeMb > 0) " • ${model.sizeMb}MB" else ""
+                val sourceTag = if (model.isDiscovered) "" else " • configured"
+                "${model.name} [${model.slug}]$sizeTag$downloadedTag$toolTag$sourceTag$activeTag"
             }
 
             runOnUiThread {
