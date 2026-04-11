@@ -6,8 +6,11 @@ import com.cactus.CactusCompletionParams
 import com.cactus.CactusContextInitializer
 import com.cactus.CactusInitParams
 import com.cactus.CactusLM
+import com.cactus.CactusModel
+import com.cactus.CactusModelManager
 import com.cactus.ChatMessage
 import com.cactus.InferenceMode
+import com.cactus.models.CactusTool
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -26,17 +29,21 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
     @Volatile private var lastInitError: String? = null
     private val initMutex = Mutex()
     private val inferenceMutex = Mutex()
+    private var toolsProvider: (suspend () -> List<CactusTool>)? = null
+    private var toolExecutor: (suspend (String, Map<String, String>) -> String)? = null
 
     companion object {
         private const val TAG = "CactusLLMEngine"
         // Cactus Kotlin SDK pattern: downloadModel(slug) -> initializeModel(CactusInitParams(model = slug)).
-        // Prefer Gemma 3 1B because it is confirmed in the on-device Cactus model registry.
+        // Prefer Gemma 4 E2B It first, then fall back to smaller Gemma variants.
         private val MODEL_CANDIDATES = listOf(
+            "google/gemma-4-E2B-it",
+            "gemma-4-e2b-it",
             "gemma3-1b",
             "gemma3-1b-pro",
             "gemma3-270m"
         )
-        private const val CONTEXT_SIZE = 4096
+        private const val CONTEXT_SIZE = 8192
         private const val MAX_TOKENS = 2048
         private const val TEMPERATURE = 0.7
         private const val TOP_K = 64
@@ -51,9 +58,91 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
         }
 
         fun getConfiguredModelSlug(): String = MODEL_CANDIDATES.first()
+        fun getConfiguredModelCandidates(): List<String> = MODEL_CANDIDATES
     }
 
     fun getActiveModelSlug(): String? = loadedModelSlug
+
+    suspend fun getAvailableModels(): List<CactusModel> {
+        return try {
+            val lm = cactusLM
+            if (lm != null) {
+                lm.getModels()
+            } else {
+                CactusLM().getModels()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch available models", e)
+            emptyList()
+        }
+    }
+
+    fun getDownloadedModels(): List<String> {
+        return try {
+            CactusModelManager.getDownloadedModels()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch downloaded models", e)
+            emptyList()
+        }
+    }
+
+    fun getModelsDirectory(): String {
+        return try {
+            CactusModelManager.getModelsDirectory()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to read models directory", e)
+            "(unknown)"
+        }
+    }
+
+    suspend fun switchModel(
+        targetModelSlug: String,
+        removePreviousModel: Boolean,
+        onProgress: ((String) -> Unit)? = null
+    ): Boolean {
+        val lm = cactusLM ?: return initialize(onProgress = onProgress) &&
+            switchModel(targetModelSlug, removePreviousModel, onProgress)
+        val previous = loadedModelSlug
+
+        return try {
+            onProgress?.invoke("⏳ Downloading selected model ($targetModelSlug)…")
+            lm.downloadModel(targetModelSlug)
+            onProgress?.invoke("⚙️ Loading selected model ($targetModelSlug)…")
+            lm.initializeModel(
+                CactusInitParams(
+                    model = targetModelSlug,
+                    contextSize = CONTEXT_SIZE
+                )
+            )
+
+            loadedModelSlug = targetModelSlug
+            lastInitError = null
+            onProgress?.invoke("✅ Switched to $targetModelSlug")
+
+            if (removePreviousModel && !previous.isNullOrBlank() && previous != targetModelSlug) {
+                val deleted = CactusModelManager.deleteModel(previous)
+                if (deleted) {
+                    onProgress?.invoke("🧹 Removed previous model: $previous")
+                } else {
+                    onProgress?.invoke("⚠️ Could not remove previous model: $previous")
+                }
+            }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed switching model to $targetModelSlug", e)
+            lastInitError = "${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
+            onProgress?.invoke("❌ Failed to switch model: $lastInitError")
+            false
+        }
+    }
+
+    fun configureToolCalling(
+        toolsProvider: suspend () -> List<CactusTool>,
+        toolExecutor: suspend (String, Map<String, String>) -> String
+    ) {
+        this.toolsProvider = toolsProvider
+        this.toolExecutor = toolExecutor
+    }
 
     override suspend fun initialize(onProgress: ((String) -> Unit)?): Boolean {
         if (isInitialized && cactusLM?.isLoaded() == true) return true
@@ -155,13 +244,28 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
                             maxTokens = MAX_TOKENS,
                             temperature = TEMPERATURE,
                             topK = TOP_K,
-                            mode = InferenceMode.LOCAL
+                            mode = InferenceMode.LOCAL,
+                            tools = resolveToolsForCurrentModel(lm)
                         )
                     )
                     Log.d(TAG, "Native inference completed")
 
                     if (result?.success == true) {
-                        result.response?.trim().orEmpty()
+                        val canUseTools = loadedModelSlug?.let { supportsToolCalling(it, lm) } == true
+                        if (
+                            canUseTools &&
+                            !result.toolCalls.isNullOrEmpty() &&
+                            toolsProvider != null &&
+                            toolExecutor != null
+                        ) {
+                            Log.d(TAG, "Tool calls detected (${result.toolCalls?.size}); executing tool loop")
+                            runToolCallingLoop(lm, prompt, result.response?.trim().orEmpty(), result.toolCalls)
+                        } else {
+                            if (!canUseTools && toolsProvider != null) {
+                                Log.d(TAG, "Current model does not support native tool-calling; using text-only response")
+                            }
+                            result.response?.trim().orEmpty()
+                        }
                     } else {
                         "Error: LLM generation failed"
                     }
@@ -176,6 +280,105 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
     override fun isReady(): Boolean = isInitialized && cactusLM?.isLoaded() == true
 
     fun getLastInitError(): String? = lastInitError
+
+    private suspend fun runToolCallingLoop(
+        lm: CactusLM,
+        initialPrompt: String,
+        initialResponse: String,
+        initialToolCalls: List<com.cactus.ToolCall>?
+    ): String {
+        val provider = toolsProvider ?: return initialResponse
+        val executor = toolExecutor ?: return initialResponse
+        val tools = provider()
+        if (tools.isEmpty()) return initialResponse
+
+        val messages = mutableListOf(
+            ChatMessage(role = "user", content = initialPrompt)
+        )
+
+        if (initialResponse.isNotBlank()) {
+            messages.add(ChatMessage(role = "assistant", content = initialResponse))
+        }
+
+        var pendingCalls = initialToolCalls.orEmpty()
+        var finalResponse = initialResponse
+        var iterations = 0
+        val maxIterations = 4
+
+        while (pendingCalls.isNotEmpty() && iterations < maxIterations) {
+            iterations++
+            pendingCalls.forEach { call ->
+                val result = try {
+                    executor(call.name, call.arguments)
+                } catch (e: Exception) {
+                    "Tool execution failed for ${call.name}: ${e.message}"
+                }
+                messages.add(
+                    ChatMessage(
+                        role = "tool",
+                        content = """{"name":"${call.name}","result":${escapeForJson(result)}}"""
+                    )
+                )
+            }
+
+            val followup = lm.generateCompletion(
+                messages = messages,
+                params = CactusCompletionParams(
+                    maxTokens = MAX_TOKENS,
+                    temperature = TEMPERATURE,
+                    topK = TOP_K,
+                    mode = InferenceMode.LOCAL,
+                    tools = tools
+                )
+            )
+
+            if (followup?.success != true) break
+            finalResponse = followup.response?.trim().orEmpty()
+            if (finalResponse.isNotBlank()) {
+                messages.add(ChatMessage(role = "assistant", content = finalResponse))
+            }
+            pendingCalls = followup.toolCalls.orEmpty()
+        }
+
+        return finalResponse
+    }
+
+    private suspend fun supportsToolCalling(slug: String, lm: CactusLM): Boolean {
+        return try {
+            lm.getModels().firstOrNull { it.slug.equals(slug, ignoreCase = true) }
+                ?.supports_tool_calling
+                ?: false
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not verify tool-calling support for $slug", e)
+            false
+        }
+    }
+
+    private suspend fun resolveToolsForCurrentModel(lm: CactusLM): List<CactusTool> {
+        val provider = toolsProvider ?: return emptyList()
+        val slug = loadedModelSlug ?: return emptyList()
+        return if (supportsToolCalling(slug, lm)) {
+            provider()
+        } else {
+            emptyList()
+        }
+    }
+
+    fun isCurrentModelToolCapable(): Boolean {
+        val slug = loadedModelSlug ?: return false
+        val normalized = normalizeSlug(slug)
+        return normalized.contains("qwen") || normalized.contains("lfm") || normalized.contains("functiongemma")
+    }
+
+    fun getToolCallingSupportSummary(): String {
+        val slug = loadedModelSlug ?: return "Model not loaded yet."
+        return if (isCurrentModelToolCapable()) {
+            "Tool calling enabled for model '$slug'."
+        } else {
+            "Model '$slug' does not advertise native tool-calling support in Cactus. " +
+                "Verdure will keep using intent-routed Kotlin tools."
+        }
+    }
 
     private fun resolveModelCandidates(
         configuredCandidates: List<String>,
@@ -218,6 +421,16 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
     }
 
     private fun normalizeSlug(value: String): String = value.trim().lowercase()
+
+    private fun escapeForJson(value: String): String {
+        val escaped = value
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t")
+        return "\"$escaped\""
+    }
 
     fun unload() {
         cactusLM?.unload()

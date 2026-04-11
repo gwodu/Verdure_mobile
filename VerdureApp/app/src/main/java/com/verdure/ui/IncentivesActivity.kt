@@ -18,7 +18,11 @@ import com.verdure.R
 import com.verdure.core.CactusLLMEngine
 import com.verdure.data.Incentive
 import com.verdure.data.IncentiveStore
+import com.verdure.services.CalendarReader
+import com.verdure.tools.CalendarTool
 import com.verdure.tools.IncentiveTool
+import com.verdure.tools.Tool
+import com.verdure.tools.toCactusTool
 import kotlinx.coroutines.launch
 
 class IncentivesActivity : AppCompatActivity() {
@@ -52,6 +56,19 @@ class IncentivesActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val llmEngine = CactusLLMEngine.getInstance(applicationContext)
             llmEngine.initialize()
+            val toolRegistry = mutableListOf<Tool>(
+                IncentiveTool(applicationContext, llmEngine),
+                CalendarTool(CalendarReader(applicationContext))
+            )
+            llmEngine.configureToolCalling(
+                toolsProvider = { toolRegistry.map { it.toCactusTool() } },
+                toolExecutor = { toolName, rawArgs ->
+                    val tool = toolRegistry.firstOrNull { it.name == toolName }
+                        ?: return@configureToolCalling "Unknown tool: $toolName"
+                    val typedArgs = rawArgs.mapValues { (_, value) -> parseToolArgumentValue(value) }
+                    tool.execute(typedArgs)
+                }
+            )
             incentiveTool = IncentiveTool(applicationContext, llmEngine)
             
             // Setup UI after initialization
@@ -199,6 +216,22 @@ class IncentivesActivity : AppCompatActivity() {
             .setMessage(message)
             .setPositiveButton("OK", null)
             .show()
+    }
+
+    private fun parseToolArgumentValue(raw: String): Any {
+        val trimmed = raw.trim()
+        if (trimmed.equals("true", ignoreCase = true) || trimmed.equals("false", ignoreCase = true)) {
+            return trimmed.toBoolean()
+        }
+        trimmed.toIntOrNull()?.let { return it }
+        trimmed.toDoubleOrNull()?.let { return it }
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+            return trimmed.removePrefix("[").removeSuffix("]")
+                .split(",")
+                .map { it.trim().trim('"', '\'') }
+                .filter { it.isNotBlank() }
+        }
+        return trimmed.trim('"', '\'')
     }
 
     private fun toggleIncentive(incentive: Incentive) {

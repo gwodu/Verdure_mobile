@@ -7,6 +7,7 @@ import com.verdure.data.Incentive
 import com.verdure.data.IncentiveMatch
 import com.verdure.data.IncentiveStore
 import com.verdure.data.NotificationData
+import com.cactus.models.ToolParameter
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -20,6 +21,21 @@ class IncentiveTool(
     
     override val name = "incentive_tracker"
     override val description = "Track goals/tasks and match notifications to them"
+    override val argumentSchema: Map<String, ToolParameter> = mapOf(
+        "action" to ToolParameter(
+            type = "string",
+            description = "Action: create, match_notification, list, get_matches, delete, toggle",
+            required = true
+        ),
+        "description" to ToolParameter(
+            type = "string",
+            description = "Natural language incentive description (for create action)"
+        ),
+        "incentive_id" to ToolParameter(
+            type = "string",
+            description = "Incentive identifier (for get_matches/delete/toggle actions)"
+        )
+    )
     
     private val incentiveStore = IncentiveStore(context)
     private val json = Json { ignoreUnknownKeys = true }

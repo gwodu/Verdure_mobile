@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.verdure.core.HybridRouter.Route
 import com.verdure.data.UserContextManager
+import com.verdure.services.CalendarReader
 import com.verdure.data.PriorityChanges
 import com.verdure.tools.Tool
 import kotlinx.serialization.Serializable
@@ -40,12 +41,14 @@ class VerdureAI(
 
     companion object {
         private const val TAG = "VerdureAI"
+        private const val CALENDAR_EVENT_LIMIT = 5
     }
 
     // Registry of all available tools
     private val tools = mutableMapOf<String, Tool>()
     private var recentConversationTurns: List<String> = emptyList()
     private val router by lazy { HybridRouter(context) }
+    private val calendarReader by lazy { CalendarReader(context) }
 
     // JSON parser for structured output
     private val json = Json { ignoreUnknownKeys = true }
@@ -186,7 +189,7 @@ Now classify the user's message:
         val notificationTool = tools["notification_filter"]
 
         if (semanticTool == null && notificationTool == null) {
-            return "I don't have access to your notifications right now."
+            return "Notification tools are not registered yet. Please restart the app and ensure notification access is granted."
         }
 
         val route = router.chooseRoute(estimatePromptTokens(userMessage))
@@ -200,7 +203,11 @@ Now classify the user's message:
                     "k" to 10
                 )
             )
-            if (semanticResult.startsWith("Embeddings not ready") && notificationTool != null) {
+            if (
+                (semanticResult.startsWith("Embeddings not ready") ||
+                    semanticResult.startsWith("No semantically relevant")) &&
+                notificationTool != null
+            ) {
                 Log.d(TAG, "Semantic retrieval unavailable, falling back to heuristic notification tool")
                 notificationTool.execute(mapOf("action" to "get_priority", "limit" to 8))
             } else semanticResult
@@ -211,11 +218,31 @@ Now classify the user's message:
         }
 
         val context = contextManager.loadContext()
+        val notificationSection = if (
+            notificationsResult.startsWith("No priority notifications") ||
+            notificationsResult.startsWith("No semantically relevant")
+        ) {
+            val fallbackFromAll = notificationTool?.execute(mapOf("action" to "get_all", "limit" to 8))
+            if (
+                fallbackFromAll != null &&
+                    !fallbackFromAll.startsWith("No priority notifications") &&
+                    !fallbackFromAll.startsWith("No recent notifications")
+            ) {
+                Log.d(TAG, "Notification query fallback: using all recent notifications")
+                fallbackFromAll
+            } else {
+                notificationsResult
+            }
+        } else {
+            notificationsResult
+        }
+        val calendarSection = buildCalendarContext()
 
         // Second LLM call to synthesize
         val summaryPrompt = buildNotificationSummaryPrompt(
             userMessage,
-            notificationsResult,
+            notificationSection,
+            calendarSection,
             context
         )
 
@@ -229,6 +256,7 @@ Now classify the user's message:
     private fun buildNotificationSummaryPrompt(
         userMessage: String,
         notificationList: String,
+        calendarContext: String,
         context: com.verdure.data.UserContext
     ): String {
         val recentTurnsSection = if (recentConversationTurns.isNotEmpty()) {
@@ -245,6 +273,9 @@ ${recentTurnsSection}
 
 Recent urgent notifications (sorted by importance):
 $notificationList
+
+Calendar context:
+$calendarContext
 
 User asked: "$userMessage"
 
@@ -545,6 +576,9 @@ ${recentTurnsSection}
 
 User: "$userMessage"
 
+Calendar context:
+${buildCalendarContext()}
+
 IMPORTANT: Structure your response as follows:
 <thinking>
 [Your internal reasoning: what the user is asking, how to best respond, what information to include]
@@ -559,6 +593,22 @@ IMPORTANT: Structure your response as follows:
     private fun estimatePromptTokens(text: String): Int {
         // Lightweight approximation for router input.
         return (text.length / 4).coerceAtLeast(1)
+    }
+
+    private fun buildCalendarContext(): String {
+        return try {
+            val events = calendarReader.getUpcomingEvents().take(CALENDAR_EVENT_LIMIT)
+            if (events.isEmpty()) {
+                "No upcoming calendar events found."
+            } else {
+                events.joinToString("\n") { event ->
+                    "- ${event.title} (${event.getTimeRange()}, ${event.getUrgencyLabel()})"
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed loading calendar context", e)
+            "Calendar unavailable."
+        }
     }
 
     // ----- Public API -----

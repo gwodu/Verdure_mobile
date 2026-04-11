@@ -1,13 +1,17 @@
 package com.verdure.data
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
  * Room entity for persistent notification storage.
  * Stores all notification data for 24 hours even after dismissal.
  */
-@Entity(tableName = "notifications")
+@Entity(
+    tableName = "notifications",
+    indices = [Index(value = ["systemKey"], unique = true)]
+)
 data class StoredNotification(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val systemKey: String,
@@ -77,7 +81,8 @@ data class StoredNotification(
          */
         fun fromNotificationData(data: NotificationData, priorityScore: Int): StoredNotification {
             return StoredNotification(
-                id = data.id,
+                // Let Room generate IDs; systemKey uniqueness handles upsert semantics.
+                id = 0,
                 systemKey = data.systemKey,
                 packageName = data.packageName,
                 appName = data.appName,

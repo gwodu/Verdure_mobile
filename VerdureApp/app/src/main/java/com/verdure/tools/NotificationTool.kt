@@ -10,6 +10,7 @@ import com.verdure.data.StoredNotification
 import com.verdure.data.UserContextManager
 import com.verdure.data.VerdurePreferences
 import com.verdure.services.VerdureNotificationListener
+import com.cactus.models.ToolParameter
 
 /**
  * Tool for analyzing and prioritizing notifications
@@ -42,18 +43,39 @@ class NotificationTool(
 
     override val name: String = "notification_filter"
     override val description: String = "Analyzes and prioritizes notifications based on importance and urgency"
+    override val argumentSchema: Map<String, ToolParameter> = mapOf(
+        "action" to ToolParameter(
+            type = "string",
+            description = "One of: get_priority, get_all, search",
+            required = true
+        ),
+        "limit" to ToolParameter(
+            type = "number",
+            description = "Maximum notifications to return",
+            required = false
+        ),
+        "keywords" to ToolParameter(
+            type = "array",
+            description = "Keywords for search action",
+            required = false
+        ),
+        "clear_after_view" to ToolParameter(
+            type = "boolean",
+            description = "Whether to dismiss viewed notifications after processing",
+            required = false
+        )
+    )
 
     override suspend fun execute(params: Map<String, Any>): String {
         val action = params["action"] as? String
         val clearAfterView = params["clear_after_view"] as? Boolean ?: DEFAULT_CLEAR_AFTER_VIEW
 
-        // If action is "get_all", just return formatted notification list (no LLM)
+        // If action is "get_all", return recent notifications (no score threshold)
         if (action == "get_all") {
-            // Get priority-filtered notifications from Room (last 24h)
-            // Limit to 8 priority notifications (safe token budget: ~1200 tokens total)
-            val notifications = getPriorityNotifications(limit = 8)
+            val limit = params["limit"] as? Int ?: 8
+            val notifications = repository.getRecentNotifications(limit)
             if (notifications.isEmpty()) {
-                return "No priority notifications right now."
+                return "No recent notifications right now."
             }
             val formatted = formatNotificationsForContext(notifications)
             maybeDismissViewedNotifications(

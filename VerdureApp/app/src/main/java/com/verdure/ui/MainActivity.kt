@@ -8,11 +8,13 @@ import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -28,10 +30,14 @@ import com.verdure.data.NotificationRepository
 import com.verdure.data.UserContextManager
 import com.verdure.data.ChatHistoryStore
 import com.verdure.services.IngestionPipeline
+import com.verdure.services.CalendarReader
 import com.verdure.services.VerdureNotificationListener
 import com.verdure.tools.AppPrioritizationTool
+import com.verdure.tools.CalendarTool
 import com.verdure.tools.NotificationTool
 import com.verdure.tools.SemanticRetrievalTool
+import com.verdure.tools.Tool
+import com.verdure.tools.toCactusTool
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
@@ -41,6 +47,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var requestPermissionButton: Button
     private lateinit var settingsButton: android.widget.ImageView
     private lateinit var incentivesButton: TextView
+    private lateinit var modelsButton: TextView
 
     // Chat components
     private lateinit var chatInput: EditText
@@ -59,6 +66,14 @@ class MainActivity : AppCompatActivity() {
         private const val CALENDAR_PERMISSION_REQUEST = 100
     }
 
+    private data class ModelOption(
+        val slug: String,
+        val name: String,
+        val sizeMb: Int,
+        val supportsToolCalling: Boolean,
+        val isDiscovered: Boolean
+    )
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CactusContextInitializer.initialize(this)
@@ -69,6 +84,7 @@ class MainActivity : AppCompatActivity() {
         requestPermissionButton = findViewById(R.id.requestPermissionButton)
         settingsButton = findViewById(R.id.settingsButton)
         incentivesButton = findViewById(R.id.incentivesButton)
+        modelsButton = findViewById(R.id.modelsButton)
         modelSlugText.text = "Model: ${CactusLLMEngine.getConfiguredModelSlug()}"
         Log.i(TAG, "LLM self-check configured model slug=${CactusLLMEngine.getConfiguredModelSlug()}")
 
@@ -107,6 +123,10 @@ class MainActivity : AppCompatActivity() {
         // Incentives button handler
         incentivesButton.setOnClickListener {
             openIncentives()
+        }
+
+        modelsButton.setOnClickListener {
+            openModelManager()
         }
 
         // Chat send button handler
@@ -164,6 +184,10 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 if (initialized) {
                     modelSlugText.text = "Model: ${llmEngine.getActiveModelSlug() ?: CactusLLMEngine.getConfiguredModelSlug()} (active)"
+                    val toolSummary = llmEngine.getToolCallingSupportSummary()
+                    if (toolSummary.isNotBlank()) {
+                        addMessageToChat("System", toolSummary, null)
+                    }
                     // Initialize user context manager
                     val contextManager = UserContextManager.getInstance(applicationContext)
 
@@ -175,9 +199,32 @@ class MainActivity : AppCompatActivity() {
                     verdureAI.setRecentConversationTurns(chatHistoryStore.getRecentForPrompt())
 
                     // Register tools (NotificationTool needs context for Room access)
-                    verdureAI.registerTool(NotificationTool(applicationContext, llmEngine, contextManager))
-                    verdureAI.registerTool(AppPrioritizationTool(contextManager, appsManager))
-                    verdureAI.registerTool(SemanticRetrievalTool(applicationContext, contextManager))
+                    val registeredTools = mutableListOf<Tool>()
+                    val notificationTool = NotificationTool(applicationContext, llmEngine, contextManager)
+                    val appTool = AppPrioritizationTool(contextManager, appsManager)
+                    val semanticTool = SemanticRetrievalTool(applicationContext, contextManager)
+                    val calendarTool = CalendarTool(CalendarReader(applicationContext))
+
+                    registeredTools.add(notificationTool)
+                    registeredTools.add(appTool)
+                    registeredTools.add(semanticTool)
+                    registeredTools.add(calendarTool)
+                    registeredTools.forEach { verdureAI.registerTool(it) }
+                    Log.i(TAG, "Registered tools: ${registeredTools.joinToString { it.name }}")
+
+                    // Provide native Cactus tool-calling bridge.
+                    llmEngine.configureToolCalling(
+                        toolsProvider = { registeredTools.map { it.toCactusTool() } },
+                        toolExecutor = { toolName, rawArgs ->
+                            val tool = registeredTools.firstOrNull { it.name == toolName }
+                                ?: return@configureToolCalling "Unknown tool: $toolName"
+
+                            val typedArgs = rawArgs.mapValues { (_, value) ->
+                                parseToolArgumentValue(value)
+                            }
+                            tool.execute(typedArgs)
+                        }
+                    )
 
                     // Initialize ingestion pipeline (runs independently in background).
                     IngestionPipeline.getInstance(applicationContext).warmup()
@@ -432,6 +479,154 @@ class MainActivity : AppCompatActivity() {
     private fun scrollToBottom() {
         chatScrollView.post {
             chatScrollView.fullScroll(ScrollView.FOCUS_DOWN)
+        }
+    }
+
+    private fun parseToolArgumentValue(raw: String): Any {
+        val trimmed = raw.trim()
+        if (trimmed.equals("true", ignoreCase = true) || trimmed.equals("false", ignoreCase = true)) {
+            return trimmed.toBoolean()
+        }
+        trimmed.toIntOrNull()?.let { return it }
+        trimmed.toDoubleOrNull()?.let { return it }
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+            return trimmed.removePrefix("[").removeSuffix("]")
+                .split(",")
+                .map { it.trim().trim('"', '\'') }
+                .filter { it.isNotBlank() }
+        }
+        return trimmed.trim('"', '\'')
+    }
+
+    private fun openModelManager() {
+        if (!::llmEngine.isInitialized) {
+            addMessageToChat("System", "AI engine is still loading. Try model switching after initialization.", null)
+            return
+        }
+
+        lifecycleScope.launch {
+            val discoveredModels = llmEngine.getAvailableModels()
+            val configuredCandidates = CactusLLMEngine.getConfiguredModelCandidates()
+            val downloaded = llmEngine.getDownloadedModels().toSet()
+            val active = llmEngine.getActiveModelSlug()
+
+            val optionsBySlug = linkedMapOf<String, ModelOption>()
+            discoveredModels.forEach { model ->
+                optionsBySlug[model.slug.lowercase()] = ModelOption(
+                    slug = model.slug,
+                    name = model.name,
+                    sizeMb = model.size_mb,
+                    supportsToolCalling = model.supports_tool_calling,
+                    isDiscovered = true
+                )
+            }
+
+            configuredCandidates.forEach { slug ->
+                val key = slug.lowercase()
+                if (!optionsBySlug.containsKey(key)) {
+                    optionsBySlug[key] = ModelOption(
+                        slug = slug,
+                        name = slug.substringAfterLast("/"),
+                        sizeMb = 0,
+                        supportsToolCalling = false,
+                        isDiscovered = false
+                    )
+                }
+            }
+
+            val models = optionsBySlug.values.sortedBy { it.slug.lowercase() }
+
+            if (models.isEmpty()) {
+                runOnUiThread {
+                    addMessageToChat("System", "No models discovered from Cactus registry right now.", null)
+                }
+                return@launch
+            }
+
+            val labels = models.map { model ->
+                val activeTag = if (model.slug == active) " (active)" else ""
+                val downloadedTag = if (downloaded.contains(model.slug)) " • downloaded" else ""
+                val toolTag = if (model.supportsToolCalling) " • tools" else ""
+                val sizeTag = if (model.sizeMb > 0) " • ${model.sizeMb}MB" else ""
+                val sourceTag = if (model.isDiscovered) "" else " • configured"
+                "${model.name} [${model.slug}]$sizeTag$downloadedTag$toolTag$sourceTag$activeTag"
+            }
+
+            runOnUiThread {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Select AI Model")
+                    .setItems(labels.toTypedArray()) { _, which ->
+                        val chosen = models[which]
+                        confirmAndSwitchModel(chosen.slug, active)
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun confirmAndSwitchModel(targetSlug: String, previousSlug: String?) {
+        val message = buildString {
+            append("Switch to:\n$targetSlug\n\n")
+            append("Verdure will download and activate this model.\n")
+            if (!previousSlug.isNullOrBlank() && previousSlug != targetSlug) {
+                append("After a successful switch, the previous model will be removed:\n$previousSlug")
+            } else {
+                append("No previous model will be removed.")
+            }
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Switch model?")
+            .setMessage(message)
+            .setPositiveButton("Switch") { _, _ ->
+                performModelSwitch(targetSlug)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun performModelSwitch(targetSlug: String) {
+        if (!::llmEngine.isInitialized) return
+
+        sendButton.isEnabled = false
+        chatInput.isEnabled = false
+
+        val statusBubble = addMessageToChat(
+            "System",
+            "⏳ Starting model switch to $targetSlug...",
+            null
+        )
+
+        lifecycleScope.launch {
+            val previous = llmEngine.getActiveModelSlug()
+            val switched = llmEngine.switchModel(
+                targetModelSlug = targetSlug,
+                removePreviousModel = true
+            ) { progress ->
+                runOnUiThread { statusBubble.text = progress }
+            }
+
+            runOnUiThread {
+                if (switched) {
+                    modelSlugText.text = "Model: ${llmEngine.getActiveModelSlug() ?: targetSlug} (active)"
+                    val toolSummary = llmEngine.getToolCallingSupportSummary()
+                    statusBubble.text = "✅ Switched to ${llmEngine.getActiveModelSlug()}\n$toolSummary"
+                } else {
+                    val details = llmEngine.getLastInitError() ?: "unknown reason"
+                    statusBubble.text = "❌ Model switch failed: $details"
+                }
+                sendButton.isEnabled = true
+                chatInput.isEnabled = true
+                chatInput.requestFocus()
+                scrollToBottom()
+            }
+
+            // Keep history and VerdureAI context coherent after switch.
+            if (switched && ::verdureAI.isInitialized) {
+                verdureAI.setRecentConversationTurns(chatHistoryStore.getRecentForPrompt())
+                Log.i(TAG, "Model switched from $previous to ${llmEngine.getActiveModelSlug()}")
+            }
         }
     }
 
