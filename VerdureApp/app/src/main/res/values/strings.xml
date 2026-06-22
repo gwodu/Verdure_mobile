@@ -2,4 +2,6 @@
 <resources>
     <string name="app_name">Verdure</string>
     <string name="widget_description">View your most critical notifications at a glance</string>
+    <string name="voice_accessibility_description">Lets Verdure show a floating microphone over your apps and insert dictated text into the field you are typing in. Speech is transcribed on your device with Whisper — no audio leaves the phone.</string>
+    <string name="voice_accessibility_summary">Floating voice typing across all apps</string>
 </resources>

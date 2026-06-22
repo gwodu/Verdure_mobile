@@ -41,6 +41,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var requestPermissionButton: Button
     private lateinit var settingsButton: android.widget.ImageView
     private lateinit var incentivesButton: TextView
+    private lateinit var voiceButton: TextView
 
     // Chat components
     private lateinit var chatInput: EditText
@@ -69,6 +70,7 @@ class MainActivity : AppCompatActivity() {
         requestPermissionButton = findViewById(R.id.requestPermissionButton)
         settingsButton = findViewById(R.id.settingsButton)
         incentivesButton = findViewById(R.id.incentivesButton)
+        voiceButton = findViewById(R.id.voiceButton)
         modelSlugText.text = "Model: ${CactusLLMEngine.getConfiguredModelSlug()}"
         Log.i(TAG, "LLM self-check configured model slug=${CactusLLMEngine.getConfiguredModelSlug()}")
 
@@ -107,6 +109,11 @@ class MainActivity : AppCompatActivity() {
         // Incentives button handler
         incentivesButton.setOnClickListener {
             openIncentives()
+        }
+
+        // Voice typing setup handler
+        voiceButton.setOnClickListener {
+            startActivity(Intent(this, VoiceSettingsActivity::class.java))
         }
 
         // Chat send button handler

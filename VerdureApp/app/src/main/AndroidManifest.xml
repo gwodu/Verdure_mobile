@@ -6,6 +6,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Voice typing (on-device Whisper dictation across all apps) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
     <application
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher"
@@ -36,6 +41,13 @@
             android:label="Incentives"
             android:parentActivityName=".ui.MainActivity"/>
 
+        <!-- Voice typing setup (mic + accessibility + Whisper download) -->
+        <activity
+            android:name=".ui.VoiceSettingsActivity"
+            android:exported="false"
+            android:label="Voice Typing"
+            android:parentActivityName=".ui.MainActivity"/>
+
 
         <!-- NotificationListenerService for capturing notifications -->
         <service
@@ -52,6 +64,25 @@
             android:name=".services.NotificationSummarizationService"
             android:enabled="true"
             android:exported="false" />
+
+        <!-- Accessibility service: floating mic overlay + text injection across apps -->
+        <service
+            android:name=".services.VoiceInputAccessibilityService"
+            android:exported="false"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/voice_accessibility_service" />
+        </service>
+
+        <!-- Microphone foreground service: records + runs Whisper during dictation -->
+        <service
+            android:name=".services.DictationForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
         <!-- Widget provider for home screen widget -->
         <receiver

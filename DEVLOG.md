@@ -1588,3 +1588,21 @@ data class StoredNotification(
 **Decision:** Use lightweight Cactus model slug `qwen3-0.6` for first-run downloads.
 **Why:** Current configured slug (`google/gemma-4-E2B-it`) is heavier and can fail due to access/compatibility constraints; SDK docs and examples consistently use lightweight slugs like `qwen3-0.6` for reliable on-device bootstrap.
 **Tradeoff:** Smaller model quality ceiling vs materially better download reliability and faster time-to-first-response.
+
+---
+
+## Session 17 - June 22, 2026
+
+**Decision:** Add on-device voice typing (a Whispr Flow alternative): OpenAI Whisper running locally as a second, narrow model alongside the LLM, with dictation usable across all apps.
+**Why:** Strategic — Verdure isn't just a model *switcher*; it runs *specialized* on-device models per task. Whisper is the "ears" model the way the LLM is the "reasoning" model. New `STTEngine` interface mirrors `LLMEngine`; `WhisperSTTEngine` wraps the Cactus SDK already in the app (no new dependency).
+**Tradeoff:** A second model to download/host on an 8GB Pixel 8A vs a genuinely useful, private, always-available capability. Default model `whisper-base` (~150MB, better accuracy) with fallback to `whisper-tiny` (~75MB) on constrained download.
+
+**Decision:** Text gets into other apps via an **Accessibility floating mic** (overlay + `ACTION_SET_TEXT`), not a custom keyboard (IME).
+**Why:** Matches the "works everywhere, no keyboard switching" feel; ships fine as a sideloaded APK. Insertion is cursor-aware with a clipboard+paste fallback.
+**Tradeoff:** Won't reach password fields / some hardened or WebView fields, and Play Store scrutinizes accessibility apps — acceptable for sideload. IME is the planned fast-follow fallback for those fields (audio + Whisper pipeline are shared, so it's cheap to add).
+
+**Decision:** Recording runs in a dedicated `microphone`-typed foreground service (`DictationForegroundService`), separate from the accessibility service.
+**Why:** Android 14 only allows mic capture while a `FOREGROUND_SERVICE_MICROPHONE` service is running; an accessibility service can't legally hold the mic alone. The two services rendezvous via an in-process `DictationCoordinator`.
+**Tradeoff:** Extra service + a transient "listening" notification vs recordings actually capturing audio instead of silence.
+
+**Open item:** Cactus STT class names (`CactusSTT`, `CactusTranscriptionParams`, `TranscriptionMode`, `CactusTranscriptionResult`) were taken from Cactus docs, not yet compiled against 1.4.3-beta in CI. Verify on first GitHub Actions build; adjust imports if the package/signatures differ.

@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background_primary"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Voice Typing"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:textColor="@color/accent_primary"
+            android:letterSpacing="0.05"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Speak into any app and Verdure types it for you. Your voice is transcribed on this phone with Whisper — nothing is sent to the cloud."
+            android:textSize="14sp"
+            android:textColor="@color/text_secondary"
+            android:lineSpacingExtra="2dp"/>
+
+        <Button
+            android:id="@+id/micPermissionButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:text="1. Allow microphone"
+            android:textColor="@color/text_primary"
+            android:textStyle="bold"
+            android:textSize="15sp"
+            android:padding="16dp"/>
+
+        <Button
+            android:id="@+id/accessibilityButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:text="2. Turn on accessibility"
+            android:textColor="@color/text_primary"
+            android:textStyle="bold"
+            android:textSize="15sp"
+            android:padding="16dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Find &quot;Verdure&quot; under Installed apps and switch it on. This lets the floating mic insert text into whatever app you&apos;re using."
+            android:textSize="12sp"
+            android:textColor="@color/text_tertiary"/>
+
+        <Button
+            android:id="@+id/downloadModelButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:text="3. Download Whisper model"
+            android:textColor="@color/text_primary"
+            android:textStyle="bold"
+            android:textSize="15sp"
+            android:padding="16dp"/>
+
+        <TextView
+            android:id="@+id/voiceStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="Complete the steps above to enable voice typing across all your apps."
+            android:textSize="13sp"
+            android:textColor="@color/text_secondary"
+            android:lineSpacingExtra="2dp"/>
+
+    </LinearLayout>
+</ScrollView>
