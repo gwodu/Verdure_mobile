@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Button
@@ -31,6 +32,7 @@ class VoiceSettingsActivity : AppCompatActivity() {
 
     private lateinit var micButton: Button
     private lateinit var accessibilityButton: Button
+    private lateinit var overlayButton: Button
     private lateinit var downloadButton: Button
     private lateinit var statusText: TextView
 
@@ -46,6 +48,7 @@ class VoiceSettingsActivity : AppCompatActivity() {
 
         micButton = findViewById(R.id.micPermissionButton)
         accessibilityButton = findViewById(R.id.accessibilityButton)
+        overlayButton = findViewById(R.id.overlayButton)
         downloadButton = findViewById(R.id.downloadModelButton)
         statusText = findViewById(R.id.voiceStatusText)
 
@@ -61,6 +64,17 @@ class VoiceSettingsActivity : AppCompatActivity() {
 
         accessibilityButton.setOnClickListener {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+
+        overlayButton.setOnClickListener {
+            if (!Settings.canDrawOverlays(this)) {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            }
         }
 
         downloadButton.setOnClickListener {
@@ -95,6 +109,7 @@ class VoiceSettingsActivity : AppCompatActivity() {
     private fun refreshState() {
         val hasMic = hasMicPermission()
         val hasA11y = isAccessibilityEnabled()
+        val hasOverlay = Settings.canDrawOverlays(this)
         val modelReady = WhisperSTTEngine.getInstance(applicationContext).isReady()
 
         markButton(micButton, hasMic, "1. Allow microphone", "1. Microphone allowed ✓")
@@ -105,15 +120,21 @@ class VoiceSettingsActivity : AppCompatActivity() {
             "2. Accessibility on ✓"
         )
         markButton(
+            overlayButton,
+            hasOverlay,
+            "3. Allow display over apps",
+            "3. Display over apps ✓"
+        )
+        markButton(
             downloadButton,
             modelReady,
-            "3. Download Whisper model",
-            "3. Whisper ready ✓"
+            "4. Download Whisper model",
+            "4. Whisper ready ✓"
         )
         downloadButton.isEnabled = !modelReady && !isDownloading
 
         statusText.text = when {
-            hasMic && hasA11y && modelReady ->
+            hasMic && hasA11y && hasOverlay && modelReady ->
                 "✅ All set. Tap the floating mic anywhere to dictate."
             else ->
                 "Complete the steps above to enable voice typing across all your apps."

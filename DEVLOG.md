@@ -1605,4 +1605,8 @@ data class StoredNotification(
 **Why:** Android 14 only allows mic capture while a `FOREGROUND_SERVICE_MICROPHONE` service is running; an accessibility service can't legally hold the mic alone. The two services rendezvous via an in-process `DictationCoordinator`.
 **Tradeoff:** Extra service + a transient "listening" notification vs recordings actually capturing audio instead of silence.
 
-**Open item:** Cactus STT class names (`CactusSTT`, `CactusTranscriptionParams`, `TranscriptionMode`, `CactusTranscriptionResult`) were taken from Cactus docs, not yet compiled against 1.4.3-beta in CI. Verify on first GitHub Actions build; adjust imports if the package/signatures differ.
+**Open item:** Cactus STT class names (`CactusSTT`, `CactusTranscriptionParams`, `TranscriptionMode`, `CactusTranscriptionResult`) were taken from Cactus docs, not yet compiled against 1.4.3-beta in CI. Verify on first GitHub Actions build; adjust imports if the package/signatures differ. → RESOLVED: compiled clean in CI run on PR #16.
+
+**Decision (fix):** Require `SYSTEM_ALERT_WINDOW` ("Display over other apps") for dictation; added as setup step 3.
+**Why:** On-device testing showed dictation produced nothing. Root cause: Android 14 forbids *starting* a `microphone` foreground service from the background, and the accessibility service is "background." Holding `SYSTEM_ALERT_WINDOW` exempts the app from that restriction so the mic FGS can start from the floating button.
+**Tradeoff:** One more permission for the user to grant vs the feature actually capturing audio. Also added stage-by-stage Toasts (listening / captured Ns / transcribed text / inject outcome) so the live device pinpoints any remaining failure, plus broadened text-injection to search all windows with a clipboard backstop.

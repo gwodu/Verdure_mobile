@@ -168,17 +168,15 @@ class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordina
     // ── Text injection into the focused field of any app ──────────────────
 
     private fun injectText(text: String) {
-        val root = rootInActiveWindow
-        val node = root?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            ?: root?.let { findFirstEditable(it) }
+        // Clipboard backstop first: even if injection fails, the user can paste.
+        copyToClipboard(text)
 
-        if (node == null || !node.isEditable) {
-            // Nothing we can type into — stash on the clipboard so the user can paste.
-            copyToClipboard(text)
+        val node = findEditableTarget()
+        if (node == null) {
             Toast.makeText(
                 this,
-                "No text field focused — copied to clipboard",
-                Toast.LENGTH_SHORT
+                "No text field focused — copied to clipboard, long-press to paste",
+                Toast.LENGTH_LONG
             ).show()
             return
         }
@@ -218,6 +216,43 @@ class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordina
             // Some fields reject SET_TEXT — try paste as a fallback.
             pasteFallback(node, text)
         }
+    }
+
+    /**
+     * Find the editable field to type into. The focused field may live in the
+     * active window or any other interactive window (some apps host the editor
+     * in a child window), so we search broadly before giving up.
+     */
+    private fun findEditableTarget(): AccessibilityNodeInfo? {
+        // 1) Input focus in the active window.
+        rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?.takeIf { it.isEditable }
+            ?.let { return it }
+
+        // 2) Input focus in any interactive window.
+        for (window in windows) {
+            val root = window.root ?: continue
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                ?.takeIf { it.isEditable }
+                ?.let { return it }
+        }
+
+        // 3) Any focused editable node we can find.
+        rootInActiveWindow?.let { root ->
+            findFocusedEditable(root)?.let { return it }
+        }
+
+        // 4) Last resort: the first editable node in the active window.
+        return rootInActiveWindow?.let { findFirstEditable(it) }
+    }
+
+    private fun findFocusedEditable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isEditable && node.isFocused) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            findFocusedEditable(child)?.let { return it }
+        }
+        return null
     }
 
     private fun pasteFallback(node: AccessibilityNodeInfo, text: String) {

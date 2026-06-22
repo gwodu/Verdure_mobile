@@ -60,11 +60,30 @@
             android:textColor="@color/text_tertiary"/>
 
         <Button
+            android:id="@+id/overlayButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:text="3. Allow display over apps"
+            android:textColor="@color/text_primary"
+            android:textStyle="bold"
+            android:textSize="15sp"
+            android:padding="16dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Required on Android 14 so the microphone can start from the floating mic button."
+            android:textSize="12sp"
+            android:textColor="@color/text_tertiary"/>
+
+        <Button
             android:id="@+id/downloadModelButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="14dp"
-            android:text="3. Download Whisper model"
+            android:text="4. Download Whisper model"
             android:textColor="@color/text_primary"
             android:textStyle="bold"
             android:textSize="15sp"

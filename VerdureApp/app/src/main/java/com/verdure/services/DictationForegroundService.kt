@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import android.widget.Toast
 import com.verdure.core.WhisperSTTEngine
 import com.verdure.voice.AudioRecorder
 import com.verdure.voice.DictationCoordinator
@@ -18,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Foreground service that holds the microphone while the user dictates.
@@ -72,33 +74,72 @@ class DictationForegroundService : Service() {
     }
 
     private fun beginRecording() {
-        goForeground()
+        // On Android 14 a background-started microphone FGS can be rejected.
+        // Surface that instead of failing silently.
+        try {
+            goForeground()
+        } catch (e: Exception) {
+            Log.e(TAG, "Foreground start failed", e)
+            toast("Can't start mic: ${e.javaClass.simpleName}. Enable 'Display over other apps' in Voice setup.")
+            DictationCoordinator.setState(DictationCoordinator.State.ERROR, "Mic blocked")
+            stopSelf()
+            return
+        }
+
         val started = recorder.start()
         if (!started) {
             Log.e(TAG, "Failed to start recorder")
+            toast("Microphone unavailable — check the mic permission")
             DictationCoordinator.setState(DictationCoordinator.State.ERROR, "Microphone unavailable")
             shutdown()
             return
         }
+        toast("🎙️ Listening… tap the mic again to insert")
         DictationCoordinator.setState(DictationCoordinator.State.RECORDING)
     }
 
+    private fun toast(message: String) {
+        Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
+    }
+
     private fun finishAndTranscribe() {
-        val audio = recorder.stop()
         DictationCoordinator.setState(DictationCoordinator.State.TRANSCRIBING)
 
         scope.launch {
+            // Stop recording off the main thread (joins the capture thread).
+            val audio = withContext(Dispatchers.IO) { recorder.stop() }
+            val seconds = audio.size / (AudioRecorder.SAMPLE_RATE * 2.0)
+            Log.i(TAG, "Captured ${audio.size} bytes (~${"%.1f".format(seconds)}s)")
+
+            if (audio.size < 32_000) {
+                toast("Didn't catch any audio — hold a bit longer (got ${"%.1f".format(seconds)}s)")
+                DictationCoordinator.setState(DictationCoordinator.State.ERROR, "Too short")
+                shutdown()
+                return@launch
+            }
+
             val engine = WhisperSTTEngine.getInstance(applicationContext)
             if (!engine.isReady()) {
-                engine.initialize()
+                toast("Loading Whisper model (first use)…")
+                val ok = engine.initialize()
+                if (!ok) {
+                    toast("Speech model not ready: ${engine.getLastError() ?: "download failed"}")
+                    DictationCoordinator.setState(DictationCoordinator.State.ERROR, "Model not ready")
+                    shutdown()
+                    return@launch
+                }
             }
+
             val text = engine.transcribe(audio)
             if (text.isNullOrBlank()) {
                 val err = engine.getLastError() ?: "No speech detected"
                 Log.w(TAG, "Empty transcription: $err")
+                toast("No text from speech: $err")
                 DictationCoordinator.setState(DictationCoordinator.State.ERROR, err)
             } else {
-                Log.i(TAG, "Transcribed ${text.length} chars")
+                Log.i(TAG, "Transcribed: $text")
+                // Visible proof the STT half worked, independent of injection.
+                toast("✍️ $text")
                 DictationCoordinator.deliverTranscription(text)
             }
             shutdown()
