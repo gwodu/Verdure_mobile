@@ -6,6 +6,7 @@ import com.verdure.core.HybridRouter.Route
 import com.verdure.data.UserContextManager
 import com.verdure.data.PriorityChanges
 import com.verdure.tools.Tool
+import com.verdure.tools.toCactusTool
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -85,6 +86,7 @@ class VerdureAI(
             "notification_query" -> handleNotificationQuery(userMessage)
             "notification_rerank" -> handleNotificationRerank(userMessage)
             "app_prioritization" -> handleAppPrioritization(userMessage)
+            "calendar" -> handleCalendar(userMessage)
             "chat" -> handleChat(userMessage)
             else -> {
                 Log.w(TAG, "Unknown intent: $intent, falling back to chat")
@@ -116,7 +118,10 @@ Classify into ONE of these intents:
 3. app_prioritization - User wants to prioritize or deprioritize specific APPS
    - Examples: "prioritize Discord", "make Instagram less important", "focus on Slack"
 
-4. chat - User is having a conversation, asking follow-up questions, or chatting casually
+4. calendar - User mentions an appointment/event/meeting to schedule, or asks what's on their calendar
+   - Examples: "I have a dentist appointment tomorrow at 3pm", "add lunch with Sarah on Friday", "what's on my calendar?"
+
+5. chat - User is having a conversation, asking follow-up questions, or chatting casually
    - Examples: "hi", "thanks", "what can you do?", "how does this work?"
 
 IMPORTANT:
@@ -125,10 +130,11 @@ IMPORTANT:
 - If user asks about notifications → notification_query
 - If user wants to prioritize/deprioritize specific APPS → app_prioritization
 - If user wants to change keywords/senders/domains → notification_rerank
+- If user mentions an event/appointment/meeting with a date or time → calendar
 
 Respond with ONLY this JSON format (no extra text):
 {
-  "intent": "notification_query OR notification_rerank OR app_prioritization OR chat",
+  "intent": "notification_query OR notification_rerank OR app_prioritization OR calendar OR chat",
   "confidence": "high OR medium OR low"
 }
 
@@ -142,6 +148,9 @@ Output: {"intent": "notification_rerank", "confidence": "high"}
 
 Input: "prioritize Discord"
 Output: {"intent": "app_prioritization", "confidence": "high"}
+
+Input: "I have a dentist appointment tomorrow at 3pm"
+Output: {"intent": "calendar", "confidence": "high"}
 
 Input: "hi there"
 Output: {"intent": "chat", "confidence": "high"}
@@ -503,7 +512,104 @@ Now extract from the user's message:
         }
     }
 
-    // ----- PASS 2D: Chat -----
+    // ----- PASS 2D: Calendar (constrained tool calling) -----
+
+    /**
+     * Handle calendar intent with auto-formalization.
+     *
+     * Preferred path: Cactus native tool calling with forceTools — the FSM
+     * constrains sampling so the model can only emit a valid `calendar`
+     * call (guidance-style select over tools), and greedy decoding keeps it
+     * deterministic. The model extracts loose fields ("dentist", "tomorrow",
+     * "3pm"); CalendarTool normalizes them in Kotlin.
+     *
+     * Fallback (non-tool-capable models like Gemma): prompt + JSON parse,
+     * same shape as the other handlers.
+     */
+    private suspend fun handleCalendar(userMessage: String): String {
+        val calendarTool = tools["calendar"]
+            ?: return "Calendar isn't set up yet — grant calendar access in settings."
+
+        val engine = llmEngine as? CactusLLMEngine
+        if (engine != null && engine.isToolCallingCapable()) {
+            val call = engine.generateForcedToolCall(
+                buildCalendarToolPrompt(userMessage),
+                listOf(calendarTool.toCactusTool())
+            )
+            if (call != null) {
+                Log.i(TAG, "Constrained calendar call: args=${call.arguments}")
+                return calendarTool.execute(call.arguments)
+            }
+            Log.w(TAG, "Constrained tool call returned nothing; using JSON fallback")
+        }
+
+        // Fallback: classic extract-JSON-then-execute.
+        val extractionJson = llmEngine.generateContent(buildCalendarExtractionPrompt(userMessage))
+        val args = parseCalendarArgs(extractionJson)
+            ?: return "I couldn't work out the event details. " +
+                "Try something like \"add dentist tomorrow at 3pm\"."
+        return calendarTool.execute(args)
+    }
+
+    private fun buildCalendarToolPrompt(userMessage: String): String {
+        val now = java.text.SimpleDateFormat(
+            "EEEE, yyyy-MM-dd HH:mm",
+            java.util.Locale.US
+        ).format(java.util.Date())
+        return """
+Today is $now.
+The user said: "$userMessage"
+
+Use the calendar tool to fulfil this. If they mention an event to schedule,
+call it with action="add" and extract title, date, and time exactly as the
+user said them. If they're asking what's coming up, use action="upcoming".
+        """.trimIndent()
+    }
+
+    private fun buildCalendarExtractionPrompt(userMessage: String): String {
+        val now = java.text.SimpleDateFormat(
+            "EEEE, yyyy-MM-dd HH:mm",
+            java.util.Locale.US
+        ).format(java.util.Date())
+        return """
+You are V, a personal AI assistant. Today is $now.
+
+User message: "$userMessage"
+
+Extract the calendar request. Respond with ONLY valid JSON:
+{
+  "action": "add OR upcoming",
+  "title": "[event title, empty if action is upcoming]",
+  "date": "[today, tomorrow, a weekday, or YYYY-MM-DD]",
+  "time": "[like 3pm or 15:00, empty if unknown]"
+}
+
+Examples:
+
+Input: "I have a dentist appointment tomorrow at 3pm"
+Output: {"action": "add", "title": "Dentist appointment", "date": "tomorrow", "time": "3pm"}
+
+Input: "what's on my calendar?"
+Output: {"action": "upcoming", "title": "", "date": "", "time": ""}
+
+Now extract from the user's message:
+        """.trimIndent()
+    }
+
+    private fun parseCalendarArgs(raw: String): Map<String, Any>? {
+        return try {
+            val jsonStart = raw.indexOf('{')
+            val jsonEnd = raw.lastIndexOf('}') + 1
+            if (jsonStart < 0 || jsonEnd <= jsonStart) return null
+            val obj = json.parseToJsonElement(raw.substring(jsonStart, jsonEnd)).jsonObject
+            obj.entries.associate { (k, v) -> k to (v.jsonPrimitive.content) }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse calendar extraction", e)
+            null
+        }
+    }
+
+    // ----- PASS 2E: Chat -----
 
     /**
      * Handle chat intent

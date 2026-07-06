@@ -27,9 +27,11 @@ import com.verdure.data.LLMResponse
 import com.verdure.data.NotificationRepository
 import com.verdure.data.UserContextManager
 import com.verdure.data.ChatHistoryStore
+import com.verdure.services.CalendarReader
 import com.verdure.services.IngestionPipeline
 import com.verdure.services.VerdureNotificationListener
 import com.verdure.tools.AppPrioritizationTool
+import com.verdure.tools.CalendarTool
 import com.verdure.tools.NotificationTool
 import com.verdure.tools.SemanticRetrievalTool
 import kotlinx.coroutines.launch
@@ -185,6 +187,9 @@ class MainActivity : AppCompatActivity() {
                     verdureAI.registerTool(NotificationTool(applicationContext, llmEngine, contextManager))
                     verdureAI.registerTool(AppPrioritizationTool(contextManager, appsManager))
                     verdureAI.registerTool(SemanticRetrievalTool(applicationContext, contextManager))
+                    verdureAI.registerTool(
+                        CalendarTool(applicationContext, CalendarReader(applicationContext))
+                    )
 
                     // Initialize ingestion pipeline (runs independently in background).
                     IngestionPipeline.getInstance(applicationContext).warmup()
@@ -492,11 +497,15 @@ class MainActivity : AppCompatActivity() {
      * Request all necessary permissions.
      */
     private fun requestAllPermissions() {
-        // Request calendar permission
+        // Request calendar permissions (read for context, write so the
+        // calendar tool can add events the user asks for).
         if (!hasCalendarPermission()) {
             ActivityCompat.requestPermissions(
                 this,
-                arrayOf(Manifest.permission.READ_CALENDAR),
+                arrayOf(
+                    Manifest.permission.READ_CALENDAR,
+                    Manifest.permission.WRITE_CALENDAR
+                ),
                 CALENDAR_PERMISSION_REQUEST
             )
         }

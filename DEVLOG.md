@@ -1610,3 +1610,27 @@ data class StoredNotification(
 **Decision (fix):** Require `SYSTEM_ALERT_WINDOW` ("Display over other apps") for dictation; added as setup step 3.
 **Why:** On-device testing showed dictation produced nothing. Root cause: Android 14 forbids *starting* a `microphone` foreground service from the background, and the accessibility service is "background." Holding `SYSTEM_ALERT_WINDOW` exempts the app from that restriction so the mic FGS can start from the floating button.
 **Tradeoff:** One more permission for the user to grant vs the feature actually capturing audio. Also added stage-by-stage Toasts (listening / captured Ns / transcribed text / inject outcome) so the live device pinpoints any remaining failure, plus broadened text-injection to search all windows with a clipboard backstop.
+
+---
+
+## Session 18 - July 6, 2026
+
+**Decision:** Floating dictation mic is focus-gated: hidden until a text field has input focus, pinned visible while recording/transcribing.
+**Why:** Always-on button annoyed the user; a mic with no focused field also has nowhere to put its output (root cause of "output goes nowhere").
+**Tradeoff:** Needs window/focus accessibility events (slightly chattier service) vs a button that only exists when it can actually deliver text.
+
+**Decision:** Dictation target is captured at record-start (node refreshed at injection), not discovered after transcription; empty fields showing hint text are treated as empty.
+**Why:** Focus can wander during the seconds Whisper takes; hint text was being spliced into output on empty fields.
+**Tradeoff:** Slightly stale node risk (mitigated by refresh + live-focus fallback) vs text landing where dictation started.
+
+**Decision:** Dictation is verified by a CI emulator test (dictation-e2e.yml), driven through debug-only adb broadcasts (DEBUG_INJECT/DEBUG_DUMP) that enter the exact production delivery path; plus an in-app "Voice typing test" screen.
+**Why:** Testing on the phone is stressful and slow; local builds/emulators are off-limits (GitHub CI only). First run: all checks green — mic hidden on home, shown on focus, text injected + appended correctly, mic hides again.
+**Tradeoff:** ~10 min extra CI per push vs regressions caught before they reach the device.
+
+**Decision:** Tool calling uses Cactus native constrained decoding (FSM over sampling + forceTools=true, temperature 0) instead of the guidance library; new "calendar" intent + CalendarTool (add/upcoming) as first user of it.
+**Why:** guidance is Python-only (can't run on Android) but its core trick — grammar-constrained token masking — is built into Cactus ≥1.4 tool calling. Fixes past "model always picks the same tool": the model *cannot* emit an invalid call, greedy decoding keeps it deterministic; LLM only extracts loose fields ("tomorrow", "3pm"), Kotlin normalizes them deterministically.
+**Tradeoff:** Tool calling marked experimental in Cactus, and constrained selection only guarantees *valid* calls, not *correct* ones — kept the prompt+JSON fallback path for non-tool-capable models.
+
+**Decision:** Model preference switched to qwen3-0.6 first (gemma3 variants as fallback).
+**Why:** Executes session 16's reliability decision, and Qwen is the only loaded-model family Cactus wires for native tool calling (Gemma isn't).
+**Tradeoff:** Existing gemma3-1b installs will download a new ~500MB model once vs tool calling actually working.

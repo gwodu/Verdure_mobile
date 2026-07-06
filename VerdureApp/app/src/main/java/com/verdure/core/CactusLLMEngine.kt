@@ -8,6 +8,8 @@ import com.cactus.CactusInitParams
 import com.cactus.CactusLM
 import com.cactus.ChatMessage
 import com.cactus.InferenceMode
+import com.cactus.ToolCall
+import com.cactus.models.CactusTool
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -30,8 +32,11 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
     companion object {
         private const val TAG = "CactusLLMEngine"
         // Cactus Kotlin SDK pattern: downloadModel(slug) -> initializeModel(CactusInitParams(model = slug)).
-        // Prefer Gemma 3 1B because it is confirmed in the on-device Cactus model registry.
+        // Prefer Qwen 3 0.6B: lightweight (reliable download, DEVLOG session 16),
+        // and the Cactus reference model for native tool calling — Gemma 3 can't
+        // do constrained tool selection, Qwen can. Gemma variants stay as fallback.
         private val MODEL_CANDIDATES = listOf(
+            "qwen3-0.6",
             "gemma3-1b",
             "gemma3-1b-pro",
             "gemma3-270m"
@@ -176,6 +181,64 @@ class CactusLLMEngine private constructor(private val context: Context) : LLMEng
     override fun isReady(): Boolean = isInitialized && cactusLM?.isLoaded() == true
 
     fun getLastInitError(): String? = lastInitError
+
+    /**
+     * Whether the loaded model can do native (FSM-constrained) tool calling.
+     * Cactus only wires constrained tool selection for these model families.
+     */
+    fun isToolCallingCapable(): Boolean {
+        val slug = normalizeSlug(loadedModelSlug ?: return false)
+        return slug.contains("qwen") || slug.contains("lfm") || slug.contains("functiongemma")
+    }
+
+    /**
+     * Constrained tool selection — the on-device equivalent of guidance's
+     * select(): Cactus applies an FSM over sampling so the model can only
+     * emit a syntactically valid call to one of [tools], and forceTools
+     * guarantees it picks one rather than replying in prose. Greedy
+     * (temperature 0) so the same request formalizes the same way each time.
+     *
+     * Returns null if the model is unavailable, not tool-capable, or the
+     * SDK produced no call — callers should fall back to prompt+parse.
+     */
+    suspend fun generateForcedToolCall(
+        prompt: String,
+        tools: List<CactusTool>
+    ): ToolCall? {
+        val lm = cactusLM
+        if (!isInitialized || lm == null || !lm.isLoaded() || tools.isEmpty()) return null
+        if (!isToolCallingCapable()) {
+            Log.i(TAG, "Model $loadedModelSlug not tool-capable; skipping constrained call")
+            return null
+        }
+
+        return inferenceMutex.withLock {
+            withContext(Dispatchers.IO) {
+                try {
+                    val result = lm.generateCompletion(
+                        messages = listOf(ChatMessage(content = prompt, role = "user")),
+                        params = CactusCompletionParams(
+                            maxTokens = 512,
+                            temperature = 0.0,
+                            mode = InferenceMode.LOCAL,
+                            tools = tools,
+                            forceTools = true
+                        )
+                    )
+                    val call = result?.toolCalls?.firstOrNull()
+                    Log.i(
+                        TAG,
+                        "Forced tool call: ${call?.name ?: "none"} args=${call?.arguments} " +
+                            "(success=${result?.success}, response=${result?.response?.take(120)})"
+                    )
+                    call
+                } catch (e: Exception) {
+                    Log.e(TAG, "Forced tool call failed", e)
+                    null
+                }
+            }
+        }
+    }
 
     private fun resolveModelCandidates(
         configuredCandidates: List<String>,
