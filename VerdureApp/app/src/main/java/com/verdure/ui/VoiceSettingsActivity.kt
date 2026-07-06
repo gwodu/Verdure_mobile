@@ -80,6 +80,10 @@ class VoiceSettingsActivity : AppCompatActivity() {
         downloadButton.setOnClickListener {
             downloadModel()
         }
+
+        findViewById<Button>(R.id.testDictationButton).setOnClickListener {
+            startActivity(Intent(this, DictationTestActivity::class.java))
+        }
     }
 
     override fun onResume() {

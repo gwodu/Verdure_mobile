@@ -1,10 +1,15 @@
 package com.verdure.services
 
 import android.accessibilityservice.AccessibilityService
+import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.ApplicationInfo
 import android.graphics.PixelFormat
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
@@ -23,13 +28,16 @@ import kotlin.math.abs
 /**
  * The "across every app" half of Verdure dictation.
  *
- * Renders a draggable floating mic over all apps via an accessibility overlay,
- * and — crucially — is the only component permitted to read the focused text
- * field of *other* apps and write Whisper's output into it.
+ * Renders a floating mic over other apps via an accessibility overlay — but
+ * only while a text field has input focus, so the button appears exactly when
+ * there is somewhere for dictated text to go. It is the only component
+ * permitted to read the focused text field of *other* apps and write
+ * Whisper's output into it.
  *
- * Tap the mic → recording starts (delegated to [DictationForegroundService]).
- * Tap again → recording stops, Whisper transcribes, and the text is inserted
- * at the cursor of whatever field currently has focus.
+ * Tap the mic → the focused field is captured as the dictation target and
+ * recording starts (delegated to [DictationForegroundService]). Tap again →
+ * recording stops, Whisper transcribes, and the text is inserted at the
+ * cursor of the captured target field.
  */
 class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordinator.Host {
 
@@ -38,14 +46,36 @@ class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordina
     private var micIcon: ImageView? = null
     private var layoutParams: WindowManager.LayoutParams? = null
 
+    /**
+     * The field dictation will type into, captured the moment the mic is
+     * tapped. Injection prefers this (after [AccessibilityNodeInfo.refresh])
+     * over a fresh focus search, so text lands in the field the user was in
+     * when they started dictating even if focus wandered meanwhile.
+     */
+    private var dictationTarget: AccessibilityNodeInfo? = null
+
+    private var debugReceiver: BroadcastReceiver? = null
+
     companion object {
         private const val TAG = "VoiceInputA11y"
+
+        /** Delay before hiding the mic after focus loss, to avoid flicker. */
+        private const val HIDE_DELAY_MS = 400L
+
+        // Debug-build-only hooks so the injection path can be exercised from
+        // adb without recording audio or running Whisper:
+        //   adb shell am broadcast -a com.verdure.dictation.DEBUG_INJECT --es text "hello"
+        //   adb shell am broadcast -a com.verdure.dictation.DEBUG_DUMP
+        const val ACTION_DEBUG_INJECT = "com.verdure.dictation.DEBUG_INJECT"
+        const val ACTION_DEBUG_DUMP = "com.verdure.dictation.DEBUG_DUMP"
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         DictationCoordinator.registerHost(this)
         addFloatingMic()
+        registerDebugHooksIfDebuggable()
+        updateMicVisibility()
         Log.i(TAG, "Voice input accessibility service connected")
     }
 
@@ -58,6 +88,8 @@ class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordina
 
         val view = LayoutInflater.from(this).inflate(R.layout.overlay_floating_mic, null)
         micIcon = view.findViewById(R.id.floatingMicIcon)
+        // Hidden until a text field takes focus.
+        view.visibility = View.GONE
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -68,9 +100,9 @@ class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordina
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.TOP or Gravity.START
+            gravity = Gravity.BOTTOM or Gravity.END
             x = 24
-            y = 320
+            y = 420
         }
         layoutParams = params
 
@@ -111,8 +143,9 @@ class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordina
                     val dy = (event.rawY - touchY).toInt()
                     if (abs(dx) > slop || abs(dy) > slop) dragging = true
                     if (dragging) {
-                        params.x = initialX + dx
-                        params.y = initialY + dy
+                        // Gravity is BOTTOM|END, so x/y offsets grow leftward/upward.
+                        params.x = initialX - dx
+                        params.y = initialY - dy
                         try {
                             wm.updateViewLayout(view, params)
                         } catch (_: Exception) {
@@ -135,8 +168,70 @@ class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordina
             DictationCoordinator.State.TRANSCRIBING -> {
                 Toast.makeText(this, "Still transcribing…", Toast.LENGTH_SHORT).show()
             }
-            else -> DictationForegroundService.start(this)
+            else -> {
+                // Lock onto the field the user is dictating into BEFORE
+                // recording starts — this is where the text will be inserted.
+                val target = findEditableTarget()
+                if (target == null) {
+                    Toast.makeText(
+                        this,
+                        "Tap into a text field first, then tap the mic",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return
+                }
+                dictationTarget = target
+                Log.i(TAG, "Dictation target locked: ${describeNode(target)}")
+                DictationForegroundService.start(this)
+            }
         }
+    }
+
+    // ── Show the mic only while a text field is focused ───────────────────
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        event ?: return
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_VIEW_FOCUSED,
+            AccessibilityEvent.TYPE_VIEW_CLICKED,
+            AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> updateMicVisibility()
+        }
+    }
+
+    private val hideRunnable = Runnable {
+        if (!shouldShowMic()) {
+            if (overlay?.visibility == View.VISIBLE) Log.i(TAG, "Floating mic hidden")
+            overlay?.visibility = View.GONE
+        }
+    }
+
+    private fun updateMicVisibility() {
+        val view = overlay ?: return
+        if (shouldShowMic()) {
+            view.removeCallbacks(hideRunnable)
+            if (view.visibility != View.VISIBLE) {
+                Log.i(TAG, "Floating mic shown (text field focused)")
+                view.visibility = View.VISIBLE
+            }
+        } else {
+            // Small grace period: focus flickers when switching between
+            // fields or when the IME animates; don't blink the button.
+            view.removeCallbacks(hideRunnable)
+            view.postDelayed(hideRunnable, HIDE_DELAY_MS)
+        }
+    }
+
+    private fun shouldShowMic(): Boolean {
+        // Never hide mid-dictation — the user needs the button to stop it,
+        // and the transcription still needs somewhere to land.
+        when (DictationCoordinator.state) {
+            DictationCoordinator.State.RECORDING,
+            DictationCoordinator.State.TRANSCRIBING -> return true
+            else -> {}
+        }
+        return findFocusedEditableTarget() != null
     }
 
     // ── DictationCoordinator.Host ─────────────────────────────────────────
@@ -158,6 +253,7 @@ class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordina
                     }
                 }
             }
+            updateMicVisibility()
         }
     }
 
@@ -171,8 +267,10 @@ class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordina
         // Clipboard backstop first: even if injection fails, the user can paste.
         copyToClipboard(text)
 
-        val node = findEditableTarget()
+        val node = resolveInjectionTarget()
+        dictationTarget = null
         if (node == null) {
+            Log.w(TAG, "Injection failed: no editable target found")
             Toast.makeText(
                 this,
                 "No text field focused — copied to clipboard, long-press to paste",
@@ -180,11 +278,16 @@ class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordina
             ).show()
             return
         }
+        Log.i(TAG, "Injecting into ${describeNode(node)}")
 
-        val existing = node.text?.toString() ?: ""
+        // An empty field often *reports* its hint ("Type a message…") as text.
+        // Treat hint text as empty or we'd splice the dictation into the hint.
+        val showingHint = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && node.isShowingHintText
+        val existing = if (showingHint) "" else node.text?.toString() ?: ""
         val selStart = node.textSelectionStart
         val selEnd = node.textSelectionEnd
-        val hasSelection = selStart in 0..existing.length && selEnd in 0..existing.length
+        val hasSelection = !showingHint &&
+            selStart in 0..existing.length && selEnd in 0..existing.length
         val insertAt = if (hasSelection) minOf(selStart, selEnd) else existing.length
         val replaceEnd = if (hasSelection) maxOf(selStart, selEnd) else existing.length
 
@@ -204,6 +307,7 @@ class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordina
             )
         }
         val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        Log.i(TAG, "ACTION_SET_TEXT result=$ok (${newText.length} chars)")
         if (ok) {
             // Place the cursor right after the inserted text.
             val cursor = inserted.length
@@ -219,11 +323,41 @@ class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordina
     }
 
     /**
+     * The field to type into: prefer the target captured when dictation
+     * started (refreshed, in case the view updated), then fall back to a
+     * live focus search.
+     */
+    private fun resolveInjectionTarget(): AccessibilityNodeInfo? {
+        dictationTarget?.let { captured ->
+            val fresh = try {
+                captured.refresh()
+            } catch (e: Exception) {
+                Log.w(TAG, "Captured target refresh threw", e)
+                false
+            }
+            if (fresh && captured.isEditable && captured.isVisibleToUser) {
+                Log.i(TAG, "Using captured dictation target")
+                return captured
+            }
+            Log.i(TAG, "Captured target stale (refresh=$fresh), falling back to focus search")
+        }
+        return findEditableTarget()
+    }
+
+    /**
      * Find the editable field to type into. The focused field may live in the
      * active window or any other interactive window (some apps host the editor
      * in a child window), so we search broadly before giving up.
      */
     private fun findEditableTarget(): AccessibilityNodeInfo? {
+        findFocusedEditableTarget()?.let { return it }
+
+        // Last resort: the first editable node in the active window.
+        return rootInActiveWindow?.let { findFirstEditable(it) }
+    }
+
+    /** Strictly focus-based search (also drives mic visibility). */
+    private fun findFocusedEditableTarget(): AccessibilityNodeInfo? {
         // 1) Input focus in the active window.
         rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
             ?.takeIf { it.isEditable }
@@ -241,9 +375,7 @@ class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordina
         rootInActiveWindow?.let { root ->
             findFocusedEditable(root)?.let { return it }
         }
-
-        // 4) Last resort: the first editable node in the active window.
-        return rootInActiveWindow?.let { findFirstEditable(it) }
+        return null
     }
 
     private fun findFocusedEditable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -258,6 +390,7 @@ class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordina
     private fun pasteFallback(node: AccessibilityNodeInfo, text: String) {
         copyToClipboard(text)
         val pasted = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        Log.i(TAG, "ACTION_PASTE fallback result=$pasted")
         if (!pasted) {
             Toast.makeText(this, "Couldn't insert here — copied to clipboard", Toast.LENGTH_SHORT)
                 .show()
@@ -279,6 +412,11 @@ class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordina
         return null
     }
 
+    private fun describeNode(node: AccessibilityNodeInfo): String =
+        "class=${node.className} pkg=${node.packageName} " +
+            "id=${node.viewIdResourceName} editable=${node.isEditable} " +
+            "focused=${node.isFocused} visible=${node.isVisibleToUser}"
+
     private fun runOnMain(block: () -> Unit) {
         val icon = micIcon
         if (icon != null) {
@@ -288,17 +426,56 @@ class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordina
         }
     }
 
-    // ── Required AccessibilityService overrides ───────────────────────────
+    // ── Debug hooks (debuggable builds only) ──────────────────────────────
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // We don't react to events; we act on explicit user taps.
+    private fun registerDebugHooksIfDebuggable() {
+        val debuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (!debuggable || debugReceiver != null) return
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                when (intent.action) {
+                    ACTION_DEBUG_INJECT -> {
+                        val text = intent.getStringExtra("text") ?: "debug injection test"
+                        Log.i(TAG, "DEBUG_INJECT: '$text' via production delivery path")
+                        // Exact production path: coordinator → host → injectText.
+                        DictationCoordinator.deliverTranscription(text)
+                    }
+                    ACTION_DEBUG_DUMP -> {
+                        val focused = findFocusedEditableTarget()
+                        val target = focused ?: rootInActiveWindow?.let { findFirstEditable(it) }
+                        val msg = if (target != null) {
+                            "target: ${describeNode(target)} (focused=${focused != null})"
+                        } else {
+                            "no editable target found; activeWindowRoot=" +
+                                "${rootInActiveWindow != null} windows=${windows.size}"
+                        }
+                        Log.i(TAG, "DEBUG_DUMP $msg")
+                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(ACTION_DEBUG_INJECT)
+            addAction(ACTION_DEBUG_DUMP)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(receiver, filter)
+        }
+        debugReceiver = receiver
+        Log.i(TAG, "Debug dictation hooks registered (DEBUG_INJECT / DEBUG_DUMP)")
     }
+
+    // ── Required AccessibilityService overrides ───────────────────────────
 
     override fun onInterrupt() {
         // No-op.
     }
 
-    override fun onUnbind(intent: android.content.Intent?): Boolean {
+    override fun onUnbind(intent: Intent?): Boolean {
         teardown()
         return super.onUnbind(intent)
     }
@@ -310,7 +487,15 @@ class VoiceInputAccessibilityService : AccessibilityService(), DictationCoordina
 
     private fun teardown() {
         DictationCoordinator.unregisterHost(this)
+        debugReceiver?.let {
+            try {
+                unregisterReceiver(it)
+            } catch (_: Exception) {
+            }
+        }
+        debugReceiver = null
         overlay?.let { v ->
+            v.removeCallbacks(hideRunnable)
             try {
                 windowManager?.removeView(v)
             } catch (_: Exception) {

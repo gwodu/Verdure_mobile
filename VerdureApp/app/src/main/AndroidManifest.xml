@@ -51,6 +51,13 @@
             android:label="Voice Typing"
             android:parentActivityName=".ui.MainActivity"/>
 
+        <!-- Plain text fields for verifying dictation (user sanity check + CI e2e) -->
+        <activity
+            android:name=".ui.DictationTestActivity"
+            android:exported="true"
+            android:label="Voice Typing Test"
+            android:parentActivityName=".ui.VoiceSettingsActivity"/>
+
 
         <!-- NotificationListenerService for capturing notifications -->
         <service

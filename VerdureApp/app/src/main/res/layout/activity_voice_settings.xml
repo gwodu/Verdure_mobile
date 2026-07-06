@@ -89,6 +89,25 @@
             android:textSize="15sp"
             android:padding="16dp"/>
 
+        <Button
+            android:id="@+id/testDictationButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:text="5. Try it out"
+            android:textColor="@color/text_primary"
+            android:textStyle="bold"
+            android:textSize="15sp"
+            android:padding="16dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Opens a test screen with a text box. Tap the box, tap the floating mic, speak, tap the mic again — your words should appear."
+            android:textSize="12sp"
+            android:textColor="@color/text_tertiary"/>
+
         <TextView
             android:id="@+id/voiceStatusText"
             android:layout_width="match_parent"
