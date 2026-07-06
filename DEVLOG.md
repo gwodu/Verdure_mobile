@@ -1588,3 +1588,49 @@ data class StoredNotification(
 **Decision:** Use lightweight Cactus model slug `qwen3-0.6` for first-run downloads.
 **Why:** Current configured slug (`google/gemma-4-E2B-it`) is heavier and can fail due to access/compatibility constraints; SDK docs and examples consistently use lightweight slugs like `qwen3-0.6` for reliable on-device bootstrap.
 **Tradeoff:** Smaller model quality ceiling vs materially better download reliability and faster time-to-first-response.
+
+---
+
+## Session 17 - June 22, 2026
+
+**Decision:** Add on-device voice typing (a Whispr Flow alternative): OpenAI Whisper running locally as a second, narrow model alongside the LLM, with dictation usable across all apps.
+**Why:** Strategic — Verdure isn't just a model *switcher*; it runs *specialized* on-device models per task. Whisper is the "ears" model the way the LLM is the "reasoning" model. New `STTEngine` interface mirrors `LLMEngine`; `WhisperSTTEngine` wraps the Cactus SDK already in the app (no new dependency).
+**Tradeoff:** A second model to download/host on an 8GB Pixel 8A vs a genuinely useful, private, always-available capability. Default model `whisper-base` (~150MB, better accuracy) with fallback to `whisper-tiny` (~75MB) on constrained download.
+
+**Decision:** Text gets into other apps via an **Accessibility floating mic** (overlay + `ACTION_SET_TEXT`), not a custom keyboard (IME).
+**Why:** Matches the "works everywhere, no keyboard switching" feel; ships fine as a sideloaded APK. Insertion is cursor-aware with a clipboard+paste fallback.
+**Tradeoff:** Won't reach password fields / some hardened or WebView fields, and Play Store scrutinizes accessibility apps — acceptable for sideload. IME is the planned fast-follow fallback for those fields (audio + Whisper pipeline are shared, so it's cheap to add).
+
+**Decision:** Recording runs in a dedicated `microphone`-typed foreground service (`DictationForegroundService`), separate from the accessibility service.
+**Why:** Android 14 only allows mic capture while a `FOREGROUND_SERVICE_MICROPHONE` service is running; an accessibility service can't legally hold the mic alone. The two services rendezvous via an in-process `DictationCoordinator`.
+**Tradeoff:** Extra service + a transient "listening" notification vs recordings actually capturing audio instead of silence.
+
+**Open item:** Cactus STT class names (`CactusSTT`, `CactusTranscriptionParams`, `TranscriptionMode`, `CactusTranscriptionResult`) were taken from Cactus docs, not yet compiled against 1.4.3-beta in CI. Verify on first GitHub Actions build; adjust imports if the package/signatures differ. → RESOLVED: compiled clean in CI run on PR #16.
+
+**Decision (fix):** Require `SYSTEM_ALERT_WINDOW` ("Display over other apps") for dictation; added as setup step 3.
+**Why:** On-device testing showed dictation produced nothing. Root cause: Android 14 forbids *starting* a `microphone` foreground service from the background, and the accessibility service is "background." Holding `SYSTEM_ALERT_WINDOW` exempts the app from that restriction so the mic FGS can start from the floating button.
+**Tradeoff:** One more permission for the user to grant vs the feature actually capturing audio. Also added stage-by-stage Toasts (listening / captured Ns / transcribed text / inject outcome) so the live device pinpoints any remaining failure, plus broadened text-injection to search all windows with a clipboard backstop.
+
+---
+
+## Session 18 - July 6, 2026
+
+**Decision:** Floating dictation mic is focus-gated: hidden until a text field has input focus, pinned visible while recording/transcribing.
+**Why:** Always-on button annoyed the user; a mic with no focused field also has nowhere to put its output (root cause of "output goes nowhere").
+**Tradeoff:** Needs window/focus accessibility events (slightly chattier service) vs a button that only exists when it can actually deliver text.
+
+**Decision:** Dictation target is captured at record-start (node refreshed at injection), not discovered after transcription; empty fields showing hint text are treated as empty.
+**Why:** Focus can wander during the seconds Whisper takes; hint text was being spliced into output on empty fields.
+**Tradeoff:** Slightly stale node risk (mitigated by refresh + live-focus fallback) vs text landing where dictation started.
+
+**Decision:** Dictation is verified by a CI emulator test (dictation-e2e.yml), driven through debug-only adb broadcasts (DEBUG_INJECT/DEBUG_DUMP) that enter the exact production delivery path; plus an in-app "Voice typing test" screen.
+**Why:** Testing on the phone is stressful and slow; local builds/emulators are off-limits (GitHub CI only). First run: all checks green — mic hidden on home, shown on focus, text injected + appended correctly, mic hides again.
+**Tradeoff:** ~10 min extra CI per push vs regressions caught before they reach the device.
+
+**Decision:** Tool calling uses Cactus native constrained decoding (FSM over sampling + forceTools=true, temperature 0) instead of the guidance library; new "calendar" intent + CalendarTool (add/upcoming) as first user of it.
+**Why:** guidance is Python-only (can't run on Android) but its core trick — grammar-constrained token masking — is built into Cactus ≥1.4 tool calling. Fixes past "model always picks the same tool": the model *cannot* emit an invalid call, greedy decoding keeps it deterministic; LLM only extracts loose fields ("tomorrow", "3pm"), Kotlin normalizes them deterministically.
+**Tradeoff:** Tool calling marked experimental in Cactus, and constrained selection only guarantees *valid* calls, not *correct* ones — kept the prompt+JSON fallback path for non-tool-capable models.
+
+**Decision:** Model preference switched to qwen3-0.6 first (gemma3 variants as fallback).
+**Why:** Executes session 16's reliability decision, and Qwen is the only loaded-model family Cactus wires for native tool calling (Gemma isn't).
+**Tradeoff:** Existing gemma3-1b installs will download a new ~500MB model once vs tool calling actually working.

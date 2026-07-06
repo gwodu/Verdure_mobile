@@ -35,6 +35,22 @@
                 android:textColor="@color/accent_primary"
                 android:letterSpacing="0.1"/>
 
+            <!-- Voice Typing Button -->
+            <TextView
+                android:id="@+id/voiceButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Voice"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:textColor="@color/accent_primary"
+                android:padding="8dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:layout_marginEnd="8dp"
+                android:contentDescription="Voice Typing Setup"/>
+
             <!-- Incentives Button -->
             <TextView
                 android:id="@+id/incentivesButton"

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Voice typing test"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:paddingBottom="8dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Tap a field below — the floating mic should appear. Tap the mic, speak, tap it again: your words should land at the cursor."
+        android:textSize="14sp"
+        android:paddingBottom="16dp" />
+
+    <EditText
+        android:id="@+id/dictationTestField"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Dictate into this field"
+        android:inputType="textMultiLine|textCapSentences"
+        android:minLines="3"
+        android:gravity="top"
+        android:importantForAutofill="no">
+
+        <requestFocus />
+    </EditText>
+
+    <EditText
+        android:id="@+id/dictationTestFieldTwo"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:hint="Second field (test switching targets)"
+        android:inputType="text"
+        android:importantForAutofill="no" />
+
+</LinearLayout>

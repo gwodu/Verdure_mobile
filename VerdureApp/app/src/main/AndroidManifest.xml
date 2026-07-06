@@ -1,10 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Calendar permissions for reading events -->
+    <!-- Calendar permissions: read events for context, write so the AI's
+         calendar tool can add events the user asks for -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Voice typing (on-device Whisper dictation across all apps) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- Exempts the mic foreground service from Android 14's background-start
+         restriction so dictation can begin from the floating overlay. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:allowBackup="true"
@@ -36,6 +46,20 @@
             android:label="Incentives"
             android:parentActivityName=".ui.MainActivity"/>
 
+        <!-- Voice typing setup (mic + accessibility + Whisper download) -->
+        <activity
+            android:name=".ui.VoiceSettingsActivity"
+            android:exported="false"
+            android:label="Voice Typing"
+            android:parentActivityName=".ui.MainActivity"/>
+
+        <!-- Plain text fields for verifying dictation (user sanity check + CI e2e) -->
+        <activity
+            android:name=".ui.DictationTestActivity"
+            android:exported="true"
+            android:label="Voice Typing Test"
+            android:parentActivityName=".ui.VoiceSettingsActivity"/>
+
 
         <!-- NotificationListenerService for capturing notifications -->
         <service
@@ -52,6 +76,25 @@
             android:name=".services.NotificationSummarizationService"
             android:enabled="true"
             android:exported="false" />
+
+        <!-- Accessibility service: floating mic overlay + text injection across apps -->
+        <service
+            android:name=".services.VoiceInputAccessibilityService"
+            android:exported="false"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/voice_accessibility_service" />
+        </service>
+
+        <!-- Microphone foreground service: records + runs Whisper during dictation -->
+        <service
+            android:name=".services.DictationForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
         <!-- Widget provider for home screen widget -->
         <receiver
